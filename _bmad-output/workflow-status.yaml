@@ -1,0 +1,13 @@
+# BIG Project Workflow Status
+
+## create-ux-design
+- status: complete
+- output: _bmad-output/planning-artifacts/ux-design-specification.md
+- completed: 2026-05-29
+- steps: 14/14
+
+## create-architecture
+- status: complete
+- output: _bmad-output/planning-artifacts/architecture.md
+- completed: 2026-06-01
+- steps: 8/8
