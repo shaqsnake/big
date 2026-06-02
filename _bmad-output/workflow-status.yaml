@@ -7,7 +7,13 @@
 - steps: 14/14
 
 ## create-architecture
-- status: complete
+- status: revised-needs-readiness-check
 - output: _bmad-output/planning-artifacts/architecture.md
 - completed: 2026-06-01
+- revised: 2026-06-02
 - steps: 8/8
+
+## next-required-check
+- status: pending
+- workflow: check-implementation-readiness
+- reason: immutable CAS, stable per-branch workdirs, explicit in-place restore, bigd MetadataRepository adapter, Candidate outbox delivery, public API/OpenAPI event contract, snapshot commit, provenance graph, and lifecycle split were revised after EDA process-isolation review

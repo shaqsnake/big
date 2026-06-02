@@ -9,10 +9,12 @@ inputDocuments:
 validationStepsCompleted: ['step-v-01-discovery', 'step-v-02-format-detection', 'step-v-03-density-validation', 'step-v-04-brief-coverage', 'step-v-05-measurability', 'step-v-06-traceability', 'step-v-07-implementation-leakage', 'step-v-08-domain-compliance', 'step-v-09-project-type', 'step-v-10-smart', 'step-v-11-holistic-quality', 'step-v-12-completeness']
 validationStatus: COMPLETE
 holisticQualityRating: '5/5 - Excellent'
-overallStatus: Pass
+overallStatus: Superseded - revalidation required after 2026-06-02 EDA process-isolation and API-boundary revision
 ---
 
 # PRD Validation Report (Round 3 — Post-3DIC/DSO Update)
+
+> **Superseded on 2026-06-02.** The PRD has been revised after EDA process-isolation, metadata-storage and GUI/API-boundary reviews. Re-run PRD validation and implementation-readiness checks before Epic/Story decomposition.
 
 **PRD Being Validated:** _bmad-output/planning-artifacts/prd.md
 **Validation Date:** 2026-05-28
@@ -296,8 +298,8 @@ Domain-Specific Requirements章节完整覆盖9个关键领域约束：
 - Innovation & Novel Patterns: Complete ✅ (5个创新点)
 - Developer Tool Specific Requirements: Complete ✅ (9个子章节)
 - Project Scoping & Phased Development: Complete ✅
-- Functional Requirements: Complete ✅ (38 FR)
-- Non-Functional Requirements: Complete ✅ (21 NFR)
+- Functional Requirements: Complete ✅ (38 FR as validated on 2026-05-28; superseded)
+- Non-Functional Requirements: Complete ✅ (21 NFR as validated on 2026-05-28; superseded)
 
 ### Section-Specific Completeness
 
