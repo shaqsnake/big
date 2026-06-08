@@ -638,3 +638,872 @@ big repo init /data/<ProjectName>_3D \
 **When** 系统输出错误信息
 **Then** 错误必须区分遗漏输入、错误输入、缺失输出、stable capture 失败、CAS 发布失败和 manifest 事务失败
 **And** 不创建可见制品集版本。
+
+### Story 1.5：提供核心 CLI 帮助与错误引导
+
+作为工程师，
+我想要通过 CLI 内置帮助查看 `big`、`big repo init` 和 `big commit` 的命令说明、参数含义和典型示例，
+以便在没有 GUI、没有额外文档入口的 SSH/NAS 工作环境中，也能正确初始化仓库和提交制品集版本。
+
+**Acceptance Criteria:**
+
+**Given** 工程师在任意目录执行 `big --help`
+**When** CLI 渲染帮助信息
+**Then** 输出显示 BIG 的用途摘要、全局选项、可用命令组和核心命令
+**And** 帮助命令不要求当前目录属于已初始化 BIG 仓库。
+
+**Given** 工程师执行 `big repo init --help`
+**When** CLI 渲染初始化命令帮助
+**Then** 输出说明普通 2D 项目的默认初始化形式：`big repo init /data/<ProjectName> --repo-id <ProjectName>`
+**And** 输出说明 3DIC 项目的 `--integration 3d` 与多个 `--work-root` 用法。
+
+**Given** 工程师执行 `big commit --help`
+**When** CLI 渲染 commit 命令帮助
+**Then** 输出说明当前实现支持的 commit 参数与能力，包括 step、inputs、outputs、commit message、success marker、settle window 和 verbose 输出
+**And** 明确说明本阶段只区分 inputs 与 outputs，不引入独立 params 角色
+**And** 具体参数名可在实现阶段按 CLI 设计调整，但帮助内容必须覆盖实际支持的参数和行为。
+
+**Given** 工程师执行任一 Epic 1 范围内命令的 `--help`
+**When** 命令帮助输出完成
+**Then** 进程退出码为 0
+**And** 不启动 `bigd`，不写元数据，不创建仓库目录或 staging 状态。
+
+**Given** 工程师输入了缺失参数、未知参数或非法参数组合
+**When** CLI 返回错误
+**Then** 错误信息显示失败原因、相关参数名和可执行的下一步提示
+**And** 提示用户使用对应命令的 `--help` 查看完整说明。
+
+**Given** 工程师在窄终端或 SSH 环境中查看帮助
+**When** CLI 输出帮助文本
+**Then** 内容保持可读，不依赖 GUI、颜色或交互式 TUI
+**And** 长示例可以换行，但不得破坏命令可复制性。
+
+**Given** 后续 Epic 添加新的命令，例如 branch、checkout、log、restore
+**When** 新命令进入实现范围
+**Then** 必须复用本 Story 建立的帮助格式、错误引导和退出码约定
+**And** 不得出现只在 GUI 或外部文档中可见的命令说明。
+
+## Epic 2：安全分支工作区与受控恢复
+
+工程师可以在已登记 NAS work root 下的稳定真实目录中切换分支、从历史版本创建新分支、选择性 checkout，并通过显式 restore 受控改写当前目录。
+
+### Story 2.1：创建命名分支并基于 Linux groups 管理分支访问
+
+作为 PD Lead，
+我想要在逻辑 BIG 仓库中创建命名分支，并让分支访问权限绑定到公司现有 Linux groups 或预定义 ACL 模板，
+以便团队可以围绕稳定分支开展并行设计工作，同时 BIG 不需要维护大量用户名单，也不会绕过公司统一权限体系。
+
+**Acceptance Criteria:**
+
+**Given** PD Lead 位于已初始化 BIG 仓库内且拥有创建分支权限
+**When** 执行 `big branch create <branch-name> --from <source-ref>`
+**Then** 系统创建一个命名分支记录
+**And** 如果 `<source-ref>` 是 branch 名，系统将其解析为该 branch 在创建事务时的当前 head version
+**And** 如果 `<source-ref>` 是 version ID，系统直接使用该 version 作为起点
+**And** 新分支记录保存解析后的确定 version ID，不随后续 source branch 移动而变化。
+
+**Given** PD Lead 创建分支时未指定 `--from`
+**When** 系统可以从当前 work root/flow workspace 解析出当前 branch
+**Then** 系统使用当前 branch 的 head version 作为新分支起点
+**And** CLI summary 明确显示实际解析到的 source branch 和 source version。
+
+**Given** PD Lead 创建分支时未指定 `--from`
+**When** 当前上下文无法解析出 branch 或 head version
+**Then** 系统拒绝创建分支
+**And** 提示用户显式指定 `--from <source-ref>`。
+
+**Given** 分支名称不合法、已存在、与保留名称冲突，或 `<source-ref>` 无法解析
+**When** PD Lead 创建分支
+**Then** 系统拒绝创建
+**And** 输出明确原因，不创建半成品分支记录或半成品工作区。
+
+**Given** source branch 已有分支 ACL
+**When** PD Lead 创建新分支且未显式指定 ACL 模板
+**Then** 新分支默认继承 source branch 的 ACL
+**And** 系统在 audit 中记录继承来源、解析后的起点 version 和创建者。
+
+**Given** 项目配置了 ACL 模板
+**When** PD Lead 执行 `big branch create <branch-name> --from <source-ref> --acl-template <template-name>`
+**Then** 系统按模板为新分支设置 owner group、read groups 和 write groups
+**And** 模板中的主体必须是 Linux group principal，例如 `group:apr_team`
+**And** BIG 不在分支 ACL 中展开或缓存 group 的完整成员名单。
+
+**Given** ACL 模板引用了不存在或无法解析的 Linux group
+**When** 系统创建分支或应用模板
+**Then** 系统拒绝操作
+**And** 输出无法解析的 group 名称和所属模板。
+
+**Given** 用户执行需要分支权限的 BIG 操作
+**When** 系统进行授权判断
+**Then** BIG 通过 IdentityResolver 读取当前 Linux 身份，包括 username、uid、primary gid 和 supplementary groups
+**And** MVP 的 IdentityResolver 使用 Linux/NSS 视角解析当前进程的 effective groups
+**And** 授权判断基于当前用户是否命中分支 ACL 中的 Linux group principal。
+
+**Given** 用户刚被公司权限系统加入某个 Linux group
+**When** 用户当前 shell/session 尚未刷新 effective groups
+**Then** BIG 可以仍按当前进程可见的 groups 做授权判断
+**And** 权限不足错误应提示用户刷新 session、重新登录或联系 IT 确认 Linux group 生效。
+
+**Given** 用户没有目标分支 read 权限
+**When** 用户执行 `big checkout <branch>`、查看分支详情或读取该分支 manifest
+**Then** 系统拒绝操作
+**And** 不泄露受保护分支的文件清单、manifest 详情或物化路径信息。
+
+**Given** 用户没有目标分支 write 权限
+**When** 用户尝试向该分支 commit、移动分支指针、修改分支 ACL 或执行受控 restore
+**Then** 系统拒绝操作
+**And** 返回权限不足的确定性错误。
+
+**Given** PD Lead 需要查看分支权限
+**When** 执行 `big branch acl show <branch> --effective`
+**Then** CLI 显示分支 ACL 中配置的 Linux group principals
+**And** 显示当前用户的 effective read/write 结果和命中的授权 group
+**And** 不要求枚举该 group 的所有成员。
+
+**Given** PD Lead 需要进行少量例外授权
+**When** 执行简单 ACL 变更，例如 `big branch acl grant <branch> --group <linux-group> --read` 或 `--write`
+**Then** 系统记录 group 级 ACL 变更
+**And** `write` 权限隐含 `read` 权限
+**And** CLI 不鼓励逐个用户维护大规模成员名单。
+
+**Given** 分支创建、ACL 模板应用或 ACL 变更成功
+**When** `bigd` 提交元数据事务
+**Then** 系统记录 append-only audit 事件
+**And** audit 事件包含操作者 username/uid、创建时可见的 groups、命中的 ACL entry、分支名、source ref、resolved source version、权限变更摘要和事务 ID。
+
+**Given** 多个 PD Lead 或自动化任务并发创建同名分支
+**When** 元数据事务提交
+**Then** 只有一个创建请求成功
+**And** 失败请求返回分支已存在，不破坏已有分支记录。
+
+### Story 2.2：checkout 到稳定真实分支工作目录且不改写源目录
+
+作为工程师，
+我想要通过 `big checkout <branch>` 进入目标分支对应的稳定真实 NAS 工作目录，
+以便我可以在新目录中启动后续 EDA 工作，同时原目录中已经运行的 EDA 进程、cwd、打开文件和绝对路径都不被 BIG 改写或打断。
+
+**Acceptance Criteria:**
+
+**Given** 工程师位于已登记 work root 下的目录，例如 `/data/<ProjectName>/user/<Username>/APR`
+**When** 执行 `big checkout <branch>`
+**Then** 系统通过当前路径向上查找 `big.toml`，解析逻辑仓库、work root、用户和 flow workspace
+**And** 将 `<branch>` 解析为目标分支当前 head version。
+
+**Given** 用户对目标分支没有 read 权限
+**When** 用户执行 `big checkout <branch>`
+**Then** 系统拒绝 checkout
+**And** 不泄露目标分支 manifest、文件列表或物化路径。
+
+**Given** 用户对目标分支有 read 权限
+**When** 系统解析 checkout 目标
+**Then** 系统根据项目配置的 branch workspace path template 计算目标稳定目录路径
+**And** 目标路径必须位于当前已登记 work root 的用户私有命名空间下
+**And** 目标路径必须包含或关联 branch、version、generation 等可追踪信息
+**And** 目标目录不得与当前源目录相同。
+
+**Given** 目标分支工作目录已经物化且对应同一 branch head version
+**When** 用户再次执行 `big checkout <branch>`
+**Then** 系统复用已有稳定目录
+**And** 不重复复制文件、不改变目录 generation。
+
+**Given** 目标分支 head version 已变化
+**When** 用户执行 `big checkout <branch>`
+**Then** 系统创建或解析新的 generation 目录
+**And** 不在旧 generation 目录中原地覆盖文件
+**And** 仍在旧目录中运行的 EDA 进程不受影响。
+
+**Given** 目标分支工作目录尚未物化
+**When** 系统从 manifest/CAS 写入工作区文件
+**Then** 系统先创建本次 checkout 私有临时物化目录
+**And** 使用 copy-only 物化，不依赖 reflink/COW
+**And** 不使用可变 `current` symlink 作为分支隔离边界
+**And** 不通过 writable hardlink 或 symlink 暴露 CAS 对象。
+
+**Given** 临时物化目录中的文件全部复制并校验完成
+**When** 系统发布目标稳定目录
+**Then** 系统以原子可见的方式登记该目录为 branch/version/generation 的稳定工作目录
+**And** 在发布完成前不把半物化目录作为可 checkout 目标暴露给用户。
+
+**Given** 目标目录物化或复用成功
+**When** 系统记录工作目录元数据
+**Then** 系统维护 owner、host、work root、flow workspace、branch、version、generation、target path 和物化时间
+**And** 这些元数据可用于后续 commit、restore、audit 和诊断。
+
+**Given** 安装了 shell 集成
+**When** 用户执行 `big checkout <branch>`
+**Then** checkout 完成后 shell 集成将父 shell 当前目录切换到目标稳定目录
+**And** CLI summary 显示目标 branch、version ID、generation 和目标路径。
+
+**Given** 未安装 shell 集成
+**When** 用户执行 `big checkout <branch>`
+**Then** BIG 仍完成目标目录解析或物化
+**And** CLI 输出可复制执行的 `cd -- <target-path>`
+**And** 输出清楚说明普通 CLI 子进程无法直接改变父 shell 的 cwd。
+
+**Given** checkout 完成
+**When** 用户在原目录中已有 EDA 进程仍在运行
+**Then** BIG 不修改原目录中的任何文件
+**And** 不改变该进程的 cwd、已打开文件描述符或绝对路径引用。
+
+**Given** checkout 失败
+**When** 失败原因是权限、manifest 缺失、CAS 对象缺失、目标目录写入失败或路径模板冲突
+**Then** 系统输出明确错误原因
+**And** 不留下半物化的可用分支目录；临时目录必须可清理或可诊断恢复。
+
+**Given** 用户在 SSH 或窄终端环境中执行 checkout
+**When** CLI 输出结果
+**Then** 默认输出保持简洁，包含 branch、version、target path 和下一步操作
+**And** `--verbose` 可以展示物化文件数、总大小、耗时和 generation 详情。
+
+### Story 2.3：从历史版本创建新分支并 checkout 到稳定目录
+
+作为工程师，
+我想要执行 `big checkout <version> --new-branch <branch-name>`，从历史制品集版本创建一个新分支并进入对应的稳定真实目录，
+以便我可以基于旧版本开展探索、修复或回退验证，而不会改写原分支目录或影响正在运行的 EDA 进程。
+
+**Acceptance Criteria:**
+
+**Given** 工程师位于已登记 work root 下的目录
+**When** 执行 `big checkout <version> --new-branch <branch-name>`
+**Then** 系统解析当前逻辑仓库、work root、用户和 flow workspace
+**And** 将 `<version>` 解析为一个确定的历史制品集版本。
+
+**Given** 用户没有该 version 的 read 权限，或没有创建新分支的权限
+**When** 用户执行该命令
+**Then** 系统拒绝操作
+**And** 不泄露受保护 version 的 manifest、文件列表或物化路径。
+
+**Given** `<branch-name>` 不合法、已存在或与保留名称冲突
+**When** 用户创建新分支
+**Then** 系统拒绝操作
+**And** 不创建分支记录或目标工作目录。
+
+**Given** 目标 version 可以被用户读取
+**When** 系统创建新分支
+**Then** 新分支指针指向该确定 version
+**And** 新分支起点不随后续任何 source branch 的移动而变化。
+
+**Given** 目标 version 可以从当前上下文或唯一可见 source branch 推导 ACL
+**When** 系统创建新分支
+**Then** 新分支默认继承 source branch ACL
+**And** 如果 source branch 不明确，系统要求用户显式指定 ACL 模板或继承来源。
+
+**Given** 新分支记录尚未对用户可见
+**When** 系统准备 checkout 目标目录
+**Then** 系统为新分支计算稳定真实 NAS 目录路径
+**And** 目标目录必须是当前源目录的兄弟/独立目录，不得与源目录相同。
+
+**Given** 目标 version 的 manifest 和 CAS 对象均可用
+**When** 系统物化新分支目录
+**Then** 系统从 manifest/CAS copy-only 到临时目录
+**And** 校验完成后才发布为新分支的稳定工作目录
+**And** 不使用可变 `current` symlink、reflink/COW 或 writable hardlink 暴露 CAS。
+
+**Given** 新分支目录物化成功
+**When** `bigd` 提交元数据事务
+**Then** 系统在同一事务中创建 branch 记录、branch head、workspace generation 记录和 audit 事件
+**And** 新分支在事务成功后才对 `big branch`、`big checkout` 和后续 commit 可见。
+
+**Given** 物化目录失败、CAS 缺失或元数据事务失败
+**When** 命令失败
+**Then** 系统不得留下可见的新分支
+**And** 临时目录必须可清理或可诊断恢复。
+
+**Given** 安装了 shell 集成
+**When** 命令成功
+**Then** 父 shell 当前目录切换到新分支稳定目录。
+
+**Given** 未安装 shell 集成
+**When** 命令成功
+**Then** CLI 输出可复制执行的 `cd -- <target-path>`。
+
+**Given** 原目录中已有 EDA 进程仍在运行
+**When** 新分支 checkout 完成
+**Then** BIG 不修改原目录中的任何文件
+**And** 不改变原进程的 cwd、已打开文件描述符或绝对路径引用。
+
+### Story 2.4：显式部分物化制品集文件子集
+
+作为工程师，
+我想要在明确需要时只物化某个 branch 或 version 中的指定文件子集，
+以便在百万文件级项目中查看、取用或验证少量历史输入、脚本、报告或局部输出，而不必为了这类局部用途全量复制整个制品集。
+
+**Acceptance Criteria:**
+
+**Given** 工程师执行普通 `big checkout <branch>` 或 `big checkout <version> --new-branch <name>`
+**When** 命令中没有显式 include/exclude 选择规则
+**Then** 系统按完整分支工作目录语义处理 checkout
+**And** 不默认创建 partial workspace。
+
+**Given** 工程师对目标 branch 或 version 有 read 权限
+**When** 执行显式部分物化命令，例如 `big checkout <branch> --include <path-or-glob>`
+**Then** 系统只从目标 manifest 中解析匹配的文件集合
+**And** 目标 branch/version 仍解析为确定的 version ID
+**And** 本次工作目录元数据标记为 `materialization = "partial"`。
+
+**Given** 用户指定多个 include pattern
+**When** 系统解析部分物化请求
+**Then** 系统合并所有匹配文件并去重
+**And** CLI summary 显示匹配文件数、总字节数和目标路径。
+
+**Given** 用户指定 exclude pattern
+**When** include 与 exclude 同时存在
+**Then** 系统先应用 include，再应用 exclude
+**And** CLI summary 显示被 exclude 排除的文件数。
+
+**Given** include pattern 没有匹配任何文件
+**When** 用户执行部分物化 checkout
+**Then** 系统拒绝操作
+**And** 输出未匹配 pattern，避免创建空的误导性工作目录。
+
+**Given** 用户没有目标 branch/version 的 read 权限
+**When** 用户执行部分物化 checkout
+**Then** 系统拒绝操作
+**And** 不泄露目标 manifest 中的文件清单、路径结构或匹配结果。
+
+**Given** 部分物化目标目录尚未创建
+**When** 系统从 manifest/CAS 写入文件
+**Then** 系统只 copy 选中文件对应的 CAS 对象
+**And** 保留文件在 manifest 中的相对路径结构
+**And** 不通过 writable hardlink 或 symlink 暴露 CAS 对象。
+
+**Given** 目标目录已经存在但选择集合不同
+**When** 用户再次执行部分物化 checkout
+**Then** 系统创建新的 workspace generation 或独立 materialization profile
+**And** 不在已有目录中静默删除、覆盖或补齐文件。
+
+**Given** 用户尝试在同一目标目录中混用 full checkout 和 partial checkout
+**When** 系统检测到 materialization profile 不一致
+**Then** 系统拒绝原地复用
+**And** 提示用户使用新的 generation、显式 restore，或指定独立目标目录。
+
+**Given** 部分物化 checkout 成功
+**When** 系统记录工作目录元数据
+**Then** 元数据记录 branch、version、generation、selection profile、include/exclude rules、文件数和总字节数
+**And** 后续 BIG 操作可以识别该目录是部分物化目录。
+
+**Given** 工程师在部分物化目录中执行后续 BIG 操作
+**When** 该操作需要目标 version 中未物化的文件
+**Then** 系统明确提示文件未物化
+**And** 不把未物化解释为目标 version 中不存在。
+
+**Given** 工程师在部分物化目录中执行 commit
+**When** commit 未显式指定 inputs/outputs 或未显式确认 partial workspace 语义
+**Then** 系统拒绝把该目录当作完整分支工作目录提交
+**And** 提示用户显式指定要提交的 inputs/outputs 或切换到完整物化目录。
+
+**Given** 部分物化过程中 CAS 对象缺失、文件复制失败或权限不足
+**When** 命令失败
+**Then** 系统不发布可用的目标目录
+**And** 临时目录必须可清理或可诊断恢复。
+
+**Given** 用户在 SSH 或窄终端环境中执行部分物化 checkout
+**When** CLI 输出结果
+**Then** 默认输出显示 version ID、目标路径、选中文件数、总字节数、`materialization = partial` 和下一步 `cd` 行为
+**And** `--full` 可展开完整文件列表。
+
+### Story 2.5：使用 reset 移动当前分支指针
+
+作为拥有当前分支 write 权限的工程师或 PD Lead，
+我想要执行 `big reset <version>` 将当前分支 head 指针移动到历史制品集版本，
+以便团队可以把分支状态回退到已知稳定版本，而不创建语义混乱的逆向 commit，也不改写任何已经存在的工作目录。
+
+**Acceptance Criteria:**
+
+**Given** 用户位于 BIG 管理的稳定工作目录中
+**When** 执行 `big reset <version>`
+**Then** 系统解析当前逻辑仓库、work root、flow workspace 和当前 branch
+**And** 将 `<version>` 解析为一个确定的历史制品集版本。
+
+**Given** 用户对当前 branch 有 write 权限
+**When** 执行 `big reset <version>`
+**Then** 系统将当前 branch head 指针移动到指定 version
+**And** 不创建新的制品集版本、manifest 或 CAS 对象
+**And** 不改写当前工作目录、不执行 restore、不自动 checkout。
+
+**Given** 用户没有当前 branch write 权限
+**When** 用户尝试执行 `big reset <version>`
+**Then** 系统拒绝操作
+**And** 返回权限不足的确定性错误。
+
+**Given** `<version>` 不存在、不可读或不属于用户可见历史
+**When** 用户执行 reset
+**Then** 系统拒绝操作
+**And** 不泄露用户无权访问的 version 详情。
+
+**Given** `<version>` 是当前 branch 历史链上的祖先版本
+**When** 用户执行 reset
+**Then** 系统允许移动 branch head
+**And** 在事务中记录 old head、new head、操作者、时间和 reason/message。
+
+**Given** `<version>` 不在当前 branch 历史链上
+**When** 用户执行普通 reset
+**Then** 系统默认拒绝操作
+**And** 提示该操作属于跨血缘重指向，需要后续单独设计，不在 MVP 普通 rollback 范围内。
+
+**Given** 当前 branch head 已经等于 `<version>`
+**When** 用户执行 reset
+**Then** 系统返回幂等成功或 no-op 提示
+**And** 不重复写 audit 事件，除非用户显式要求记录。
+
+**Given** reset 成功
+**When** `bigd` 提交元数据事务
+**Then** 该事务只更新当前 branch head 指针和 audit/hash-chain 事件
+**And** 不改写任何 workspace generation、checkout 目录或源目录文件。
+
+**Given** reset 成功后已有工程师仍在旧 generation 目录中运行 EDA
+**When** 这些进程继续运行
+**Then** BIG 不改变它们的 cwd、已打开文件描述符或绝对路径引用
+**And** 新执行 `big checkout <branch>` 的用户会解析到 reset 后的新 head version。
+
+**Given** 用户需要进入 reset 后的分支目录
+**When** 用户随后执行 `big checkout <branch>`
+**Then** 系统按 Story 2.2 解析或物化对应 new head version 的稳定目录
+**And** `big reset <version>` 本身不隐式执行目录切换。
+
+**Given** reset 失败
+**When** 失败原因是权限、目标 version 无效、并发更新或元数据事务失败
+**Then** 系统保持 old head 不变
+**And** 输出明确错误原因和可操作建议。
+
+**Given** 用户熟悉 Git reset
+**When** 查看 `big reset --help`
+**Then** 帮助必须明确说明 BIG MVP 的 reset 是 branch pointer reset only
+**And** 不等同于 Git hard reset，不会改写工作目录文件。
+
+### Story 2.6：显式原地 restore 当前工作目录
+
+作为工程师，
+我想要在明确确认后执行 `big restore --in-place <version>`，将当前稳定工作目录恢复到指定制品集版本的文件状态，
+以便我可以在确实需要复用当前目录路径时受控改写文件，同时 BIG 能检测 dirty state、活动 lease，并通过 restore journal 支持失败诊断和恢复。
+
+**Acceptance Criteria:**
+
+**Given** 工程师位于 BIG 管理的稳定工作目录中
+**When** 执行 `big restore --in-place <version>`
+**Then** 系统解析当前逻辑仓库、work root、flow workspace、branch、workspace generation 和目标 version
+**And** 该命令必须显式包含 `--in-place`，不得由 `checkout` 或 `reset` 隐式触发。
+
+**Given** 用户没有当前 branch write 权限或目标 version read 权限
+**When** 用户执行 restore
+**Then** 系统拒绝操作
+**And** 不泄露用户无权访问的 version manifest 或文件列表。
+
+**Given** 当前工作目录存在 dirty state
+**When** 用户执行 restore
+**Then** 系统拒绝操作
+**And** 输出 dirty 文件摘要、变化数量和建议处理方式。
+
+**Given** 当前工作目录存在活动受管 lease
+**When** 用户执行 restore
+**Then** 系统拒绝操作
+**And** 输出 lease owner、命令摘要和建议等待或终止受管流程。
+
+**Given** 当前目录可能存在手工启动的 EDA 写入进程
+**When** 用户执行 restore
+**Then** CLI 必须提示 BIG 无法可靠自动发现所有外部写入进程
+**And** 要求用户显式确认已停止相关写入或使用项目约定的 quiet-state 流程。
+
+**Given** 用户确认继续 restore
+**When** 系统准备改写当前目录
+**Then** 系统先生成 restore plan
+**And** plan 包含待新增、待覆盖、待删除或待保留文件数量、总字节数和目标 version ID。
+
+**Given** restore plan 已生成
+**When** 用户未使用强制确认选项
+**Then** CLI 展示 plan 摘要并要求二次确认
+**And** 默认选择为取消。
+
+**Given** restore 开始执行
+**When** 系统写入文件
+**Then** 系统使用 copy-only 物化到同目录临时文件
+**And** 校验临时文件内容后再逐文件替换目标路径
+**And** 不使用 writable hardlink、symlink、reflink/COW 暴露 CAS。
+
+**Given** restore 需要删除当前目录中目标 version 不存在的文件
+**When** 系统执行删除阶段
+**Then** 删除行为必须在 plan 中明确列出
+**And** MVP 可以默认拒绝删除，除非用户显式启用删除选项。
+
+**Given** restore 执行中断或失败
+**When** 用户或系统查看恢复状态
+**Then** `restore journal` 记录已完成、未完成和失败的文件操作
+**And** 后续命令可以根据 journal 提示继续、回滚或人工处理。
+
+**Given** restore 成功完成
+**When** 系统更新工作目录元数据
+**Then** 系统更新 workspace generation、restored_from version、restore timestamp 和操作者
+**And** 记录 append-only audit 事件。
+
+**Given** restore 成功完成
+**When** CLI 输出 summary
+**Then** 输出变化文件数、总字节数、目标 version、restore journal ID 和新的 generation
+**And** 提醒用户重新打开文件或重启可能缓存旧内容的 EDA 工具。
+
+**Given** restore 完成后用户继续在当前目录工作
+**When** 后续执行 `big commit`
+**Then** 系统可以识别该目录经历过 in-place restore
+**And** commit provenance 中可记录 restore journal ID 和 restored_from version。
+
+## Epic 3：版本历史、配方洞察与血缘追溯
+
+工程师可以查看历史、配方详情、配方差异、回退语义、上游血缘、下游影响和基础跨分支依赖关系。
+
+### Story 3.1：查看分支上的制品集版本历史
+
+作为工程师，
+我想要查看某个分支上的制品集版本历史，
+以便我可以找到最近提交、定位历史版本 ID，并把 CLI 输出中的版本 ID 用于 checkout、reset、recipe 查看、diff 或 GUI 搜索。
+
+**Acceptance Criteria:**
+
+**Given** 工程师位于 BIG 管理的稳定工作目录中
+**When** 执行 `big log`
+**Then** 系统解析当前逻辑仓库和当前 branch
+**And** 按时间或拓扑顺序显示当前 branch head 可达的制品集版本历史。
+
+**Given** 工程师想查看指定分支历史
+**When** 执行 `big log <branch>`
+**Then** 系统显示该 branch 当前 head 可达的版本历史
+**And** 不要求用户先 checkout 到该 branch。
+
+**Given** 用户没有目标 branch read 权限
+**When** 执行 `big log <branch>`
+**Then** 系统拒绝查询
+**And** 不泄露该分支的 version ID、manifest 摘要或提交信息。
+
+**Given** 分支曾经执行过 `big reset <version>`
+**When** 用户查看该分支历史
+**Then** `big log` 默认显示 reset 后当前 head 可达的历史链
+**And** reset 审计事件不伪装成制品集版本 commit。
+
+**Given** 历史中存在大量版本
+**When** 用户执行 `big log`
+**Then** 默认输出分页或限制条数
+**And** 支持 `--limit`、`--after` 或等价游标参数继续查看历史。
+
+**Given** 仓库中至少存在 10 万个制品集版本历史记录
+**When** 用户查看单个分支的最近历史
+**Then** 查询必须使用索引或等价机制避免全仓扫描
+**And** 默认查询在可接受时间内返回。
+
+**Given** 单条版本历史记录被输出
+**When** CLI 渲染该记录
+**Then** 输出包含稳定 version ID、branch、提交时间、作者、step、制品集状态、resident/recipe_only 状态和简短 message
+**And** version ID 与 GUI 实体 ID 保持一致。
+
+**Given** 用户使用 `--verbose`
+**When** CLI 输出历史
+**Then** 每条记录可展开显示 parent version、recipe_hash、capture_mode、inputs/outputs 数量和 workspace generation 摘要。
+
+**Given** 用户使用 `--full`
+**When** CLI 输出历史
+**Then** 可以进一步展示完整 manifest 摘要或文件列表入口
+**And** 对大文件列表必须分页或提示使用更具体的 recipe/detail 命令。
+
+**Given** 分支没有任何可见版本
+**When** 用户执行 `big log <branch>`
+**Then** 系统输出空历史提示
+**And** 不返回错误，除非分支不存在或用户无权访问。
+
+**Given** 用户在 SSH 或窄终端环境中查看历史
+**When** CLI 输出结果
+**Then** 默认输出保持紧凑可读
+**And** 不依赖 GUI、X11 或交互式 TUI。
+
+### Story 3.2：查看制品集版本的 manifest 与 recipe 详情
+
+作为工程师，
+我想要查看任意可访问制品集版本的 manifest、inputs、outputs 和 recipe 摘要，
+以便我可以理解该版本由哪些文件产生、产出了哪些文件，并用文件 hash、recipe_hash 和 capture evidence 做追溯或问题定位。
+
+**Acceptance Criteria:**
+
+**Given** 用户拥有目标 version 的 read 权限
+**When** 执行 `big show <version>`
+**Then** 系统显示该 version 的基本信息
+**And** 包含 version ID、branch、parent version、作者、提交时间、step、message、状态和驻留状态。
+
+**Given** 目标 version 包含 manifest
+**When** 用户查看详情
+**Then** 系统显示 manifest 摘要
+**And** 包含 inputs 数量、outputs 数量、总字节数、capture_mode、manifest hash 和 recipe_hash。
+
+**Given** 用户使用默认输出
+**When** CLI 渲染详情
+**Then** 只展示摘要和关键 hash
+**And** 不默认展开完整百万级文件列表。
+
+**Given** 用户使用 `--verbose`
+**When** CLI 渲染详情
+**Then** 展示 inputs/outputs 的分类摘要、semantic_role、format_hint、文件大小分布和 capture evidence 摘要。
+
+**Given** 用户使用 `--full`
+**When** CLI 渲染详情
+**Then** 展示完整 FileRef 列表或分页入口
+**And** 每个 FileRef 包含 path、role、SHA-256、size、semantic_role 和 format_hint。
+
+**Given** 脚本、配置或参数文件在当前 MVP 中仍作为 inputs 记录
+**When** 系统展示 recipe 详情
+**Then** 系统显示这些文件的 semantic_role/format_hint
+**And** 不强行引入独立 params 角色；独立 params 分类留待后续需求细化。
+
+**Given** 用户没有目标 version read 权限
+**When** 执行 `big show <version>`
+**Then** 系统拒绝查询
+**And** 不泄露 manifest、文件路径、hash 或提交信息。
+
+**Given** 目标 version 不存在或已不可访问
+**When** 用户查看详情
+**Then** 系统返回明确错误
+**And** 区分 version 不存在、无权访问、manifest 缺失和 CAS/metadata 损坏。
+
+**Given** 目标 version 的驻留状态为 `recipe_only`
+**When** 用户查看详情
+**Then** 系统仍可展示 recipe、manifest 和 FileRef hash
+**And** 明确提示输出文件内容可能需要重新物化或重跑。
+
+**Given** 实现阶段调整详情命令名称
+**When** 命令从 `big show <version>` 调整为等价命令
+**Then** CLI 帮助和 Story 验收仍必须覆盖 version 基本信息、manifest 摘要、FileRef 详情和权限边界。
+
+### Story 3.3：对比两个制品集版本的 recipe 与 manifest 差异
+
+作为工程师，
+我想要对比两个制品集版本的 inputs、outputs、recipe_hash 和 manifest 摘要差异，
+以便我可以快速判断一次 EDA 结果变化是由输入变化、输出变化、step/recipe 变化，还是仅由驻留状态或元数据变化引起。
+
+**Acceptance Criteria:**
+
+**Given** 用户拥有两个目标 version 的 read 权限
+**When** 执行 `big diff <old-version> <new-version>`
+**Then** 系统对比两个 version 的 manifest 和 recipe 摘要
+**And** 默认输出 CLI unified diff 风格的摘要结果。
+
+**Given** 任一目标 version 不存在或用户无权访问
+**When** 用户执行 diff
+**Then** 系统拒绝查询
+**And** 不泄露无权访问 version 的 manifest、文件路径、hash 或提交信息。
+
+**Given** 两个 version 的 recipe_hash 相同
+**When** 系统渲染 diff
+**Then** 输出明确显示 recipe_hash unchanged
+**And** 继续展示 outputs 是否发生变化。
+
+**Given** 两个 version 的 recipe_hash 不同
+**When** 系统渲染 diff
+**Then** 输出显示 recipe_hash changed
+**And** 展示导致 recipe 差异的 inputs 文件身份变化摘要。
+
+**Given** inputs 文件集合发生变化
+**When** 系统对比 FileRef
+**Then** diff 显示新增、删除和内容 hash 改变的 input 路径数量
+**And** `--verbose` 展示这些路径的摘要列表。
+
+**Given** outputs 文件集合发生变化
+**When** 系统对比 FileRef
+**Then** diff 显示新增、删除和内容 hash 改变的 output 路径数量
+**And** 默认不展开百万级完整列表。
+
+**Given** 某个路径在两个 version 中都存在但 SHA-256 不同
+**When** 系统输出 diff
+**Then** 显示该路径为 modified
+**And** 展示 old hash、new hash、old size、new size 的短摘要。
+
+**Given** 某个路径只在 new version 中存在
+**When** 系统输出 diff
+**Then** 显示该路径为 added。
+
+**Given** 某个路径只在 old version 中存在
+**When** 系统输出 diff
+**Then** 显示该路径为 removed。
+
+**Given** 用户使用 `--full`
+**When** CLI 输出 diff
+**Then** 可以展开完整 changed FileRef 列表
+**And** 对超大列表必须分页或提示导出到文件。
+
+**Given** 两个 version 的文件内容相同但生命周期状态或驻留状态不同
+**When** 系统输出 diff
+**Then** 将状态差异与 recipe/manifest 文件差异分开显示
+**And** 不把驻留状态变化误判为 recipe 变化。
+
+**Given** 两个 version 属于不同 branch
+**When** 用户执行 diff
+**Then** 系统允许跨分支 diff
+**And** 输出显示 old branch/new branch，帮助用户理解差异来源。
+
+**Given** 用户在 SSH 或窄终端环境中查看 diff
+**When** CLI 输出结果
+**Then** 输出保持可读，不依赖 GUI
+**And** 使用 `--verbose` / `--full` 渐进披露更大差异。
+
+### Story 3.4：记录 derived_from 与逆向上游血缘链
+
+作为工程师，
+我想要从任意制品集版本逆向追溯其 parent、derived_from 和 consumes 上游关系，
+以便我可以理解一个版本来自哪个历史版本、是否由回退后重新生成，以及它消费了哪些跨分支上游制品。
+
+**Acceptance Criteria:**
+
+**Given** 系统创建新的制品集版本
+**When** 新版本由普通 commit 产生
+**Then** 系统记录 `version_parent` 关系，指向当前 branch 的上一 head version
+**And** 该关系表达版本祖先关系，不等同于数据依赖关系。
+
+**Given** 用户从历史 version 创建新分支并重新 commit
+**When** 新版本语义上来自该历史 version
+**Then** 系统可以记录 `derived_from` 关系
+**And** `derived_from` 不替代当前 branch 上的 parent 关系。
+
+**Given** 某个版本消费了另一个 branch 或 version 的输出作为 input
+**When** 用户在 commit 时声明或系统从 manifest/provenance 解析该关系
+**Then** 系统记录 `provenance_edge`，类型为 `consumes`
+**And** 可以表达跨分支上游制品依赖。
+
+**Given** 用户执行 `big lineage <version>`
+**When** 系统查询逆向血缘
+**Then** 输出该 version 的 parent 链、derived_from 边和 consumes 上游边
+**And** 默认以递归 tree 形式展示。
+
+**Given** lineage 中包含用户无权读取的上游 version
+**When** 系统输出血缘结果
+**Then** 系统隐藏无权访问 version 的详细信息
+**And** 可以显示受限占位符，避免破坏 tree 结构。
+
+**Given** lineage 链很长
+**When** 用户执行默认查询
+**Then** 系统限制默认深度
+**And** 支持 `--depth` 或等价参数扩大查询范围。
+
+**Given** 仓库中至少有 1 万个制品集版本
+**When** 用户查询单个 version 的逆向血缘链
+**Then** 查询必须在 30 秒内完成
+**And** 使用索引或等价结构避免全仓扫描。
+
+**Given** 用户使用 `--verbose`
+**When** 系统输出 lineage
+**Then** 每个节点显示 version ID、branch、step、作者、时间、recipe_hash、状态和边类型。
+
+**Given** 用户使用 `--full`
+**When** 系统输出 lineage
+**Then** 可以展开每条边的 evidence，例如 consumes 的 FileRef、路径、hash 和 manifest 引用。
+
+**Given** lineage 中同时存在 parent 与 consumes 边
+**When** 系统渲染结果
+**Then** 必须清楚区分版本祖先关系与数据依赖关系
+**And** 不把跨分支数据依赖误显示为 commit parent。
+
+**Given** 用户在 SSH 或窄终端环境中查看 lineage
+**When** CLI 输出结果
+**Then** tree 输出保持可读
+**And** 不依赖 GUI；Growth GUI 可在后续以 DAG 形式增强。
+
+### Story 3.5：查看血缘链上每个节点引入的 recipe 变化
+
+作为工程师，
+我想要在查看血缘链时看到每个版本节点相对于父节点引入的 recipe/input 变化摘要，
+以便我可以快速定位是哪一次提交改变了脚本、配置、输入文件或其他影响 recipe_hash 的内容。
+
+**Acceptance Criteria:**
+
+**Given** 用户拥有目标 version 及其可见上游节点的 read 权限
+**When** 执行 `big lineage <version> --changes`
+**Then** 系统在血缘 tree 中为每个可见节点显示相对于 parent 的变化摘要
+**And** 默认只显示变化数量和关键摘要，不展开完整文件列表。
+
+**Given** 某个节点的 recipe_hash 相比 parent 未变化
+**When** 系统渲染该节点
+**Then** 输出显示 recipe unchanged
+**And** 不把 outputs 或驻留状态变化误报为 recipe 变化。
+
+**Given** 某个节点的 recipe_hash 相比 parent 发生变化
+**When** 系统渲染该节点
+**Then** 输出显示 recipe changed
+**And** 展示 inputs 中 added、removed、modified 的数量。
+
+**Given** 改变的 input 文件包含脚本、配置、runset、SDC 或类似文本类可编辑文件
+**When** 系统已有 semantic_role/format_hint
+**Then** 输出优先突出这些高影响文件
+**And** 不要求 MVP 对文件内容做文本级 diff。
+
+**Given** 用户使用 `--verbose`
+**When** 系统输出变化摘要
+**Then** 展示每个节点 changed inputs 的路径摘要、旧 hash、新 hash、文件大小变化和 semantic_role。
+
+**Given** 用户使用 `--full`
+**When** 系统输出变化详情
+**Then** 可以展开所有 changed FileRef
+**And** 对超大列表必须分页或提示导出。
+
+**Given** 某个上游节点因权限不可见
+**When** 系统计算变化摘要
+**Then** 不展示该节点的变化细节
+**And** 显示受限占位符，避免泄露路径或 hash。
+
+**Given** lineage 中存在 `derived_from` 或 `consumes` 边
+**When** 系统显示变化摘要
+**Then** 对 parent 边和 consumes 边分别计算或标注变化含义
+**And** 不把跨分支 consumes 输入变化误解释为同一 branch 的 commit 修改。
+
+**Given** 后续引入独立 params 角色
+**When** 系统展示 `--changes`
+**Then** params 变化应作为 recipe 变化的独立分组展示
+**And** 不破坏 MVP 已有 inputs 变化展示。
+
+### Story 3.6：正向追溯下游影响范围
+
+作为工程师，
+我想要从任意制品集版本正向查看哪些下游版本依赖它，
+以便当上游版本发生变更、回退或淘汰时，我可以识别可能受影响的下游 flow、branch 或制品集版本。
+
+**Acceptance Criteria:**
+
+**Given** 用户拥有目标 version 的 read 权限
+**When** 执行 `big impact <version>`
+**Then** 系统查询以该 version 为上游的 `provenance_edge(consumes)` 反向关系
+**And** 输出直接依赖该 version 的下游版本列表。
+
+**Given** 用户使用默认查询
+**When** 系统输出 impact 结果
+**Then** 默认只显示一层直接下游影响
+**And** 包含下游 version ID、branch、step、作者、时间、状态和依赖边类型。
+
+**Given** 用户使用 `--depth <n>`
+**When** 系统查询下游影响
+**Then** 系统递归展开 n 层下游依赖
+**And** 防止环或重复节点导致无限遍历。
+
+**Given** 某个下游 version 用户无权读取
+**When** 系统输出影响范围
+**Then** 隐藏该 version 的详细信息
+**And** 可以显示受限占位符和受影响计数。
+
+**Given** 下游依赖来自跨分支 consumes 边
+**When** 系统输出结果
+**Then** 输出必须显示上游 branch 与下游 branch
+**And** 不把跨分支数据依赖误解释为 commit parent。
+
+**Given** 用户使用 `--verbose`
+**When** 系统输出 impact 结果
+**Then** 每条依赖边展示 evidence 摘要，例如依赖的 FileRef、路径、hash 和 manifest 引用。
+
+**Given** 用户使用 `--full`
+**When** 系统输出 impact 结果
+**Then** 可以展开完整下游树或 DAG 摘要
+**And** 对大型影响范围必须分页或支持导出。
+
+**Given** 上游 version 没有任何可见下游依赖
+**When** 用户执行 `big impact <version>`
+**Then** 系统输出 no visible downstream impact
+**And** 不把无权限节点误报为无影响。
+
+**Given** 仓库中存在大量版本和跨分支依赖
+**When** 用户查询单个 version 的影响范围
+**Then** 查询必须使用索引或等价结构避免全仓扫描
+**And** 默认直接下游查询在可接受时间内返回。
+
+**Given** Growth GUI 后续实现影响分析视图
+**When** 使用同一公共 API 查询 impact
+**Then** GUI 与 CLI 必须共享同一权限过滤、节点 ID 和依赖边语义
+**And** 不引入 GUI 专用影响分析逻辑。
