@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "big"
+version = "0.1.0"
+description = "BIG prototype CLI for EDA artifact snapshots"
+requires-python = ">=3.11"
+dependencies = [
+  "click>=8.1,<9",
+]
+
+[project.scripts]
+big = "big.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
