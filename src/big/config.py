@@ -39,6 +39,16 @@ class RepoConfig:
         return self.big_dir / "staging"
 
 
+@dataclass(frozen=True)
+class WorkspaceContext:
+    work_root: WorkRoot
+    user: str
+    flow: str
+    workspace_path: Path
+    workspace_id: str
+    default_branch: str
+
+
 def _posix(path: Path) -> str:
     return path.resolve().as_posix()
 
@@ -114,3 +124,27 @@ def resolve_work_root(config: RepoConfig, path: Path) -> WorkRoot:
     if not matches:
         raise ValueError(f"{path} is not under any registered work root")
     return max(matches, key=lambda item: len(item.path.parts))
+
+
+def resolve_workspace_context(config: RepoConfig, path: Path) -> WorkspaceContext:
+    resolved = path.resolve()
+    work_root = resolve_work_root(config, resolved)
+    relative_parts = resolved.relative_to(work_root.path).parts
+    if len(relative_parts) < 3 or relative_parts[0] != "user":
+        raise ValueError(
+            "Current path must be under user/<username>/<flow> in a registered work root"
+        )
+
+    user = relative_parts[1]
+    flow = relative_parts[2]
+    workspace_path = work_root.path / "user" / user / flow
+    workspace_id = f"user/{user}/{flow}"
+    default_branch = f"workspace/{work_root.id}/{user}/{flow}"
+    return WorkspaceContext(
+        work_root=work_root,
+        user=user,
+        flow=flow,
+        workspace_path=workspace_path,
+        workspace_id=workspace_id,
+        default_branch=default_branch,
+    )

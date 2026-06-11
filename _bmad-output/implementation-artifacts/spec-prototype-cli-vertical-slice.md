@@ -15,6 +15,8 @@ context:
 
 **方案：** 构建一个 Python Click 包，提供 `big repo init`、`big commit`、`big log`、`big show` 和 `big diff`。同时提供自动化测试、`manual-lab` 手工实验目录和中文手工测试说明。
 
+**设计修正：** 未显式指定 `--branch` 时，`big commit` 和 `big log` 默认使用当前目录解析出的 workspace-private ref，例如 `workspace/default/alice/APR`。共享 `main` 只作为显式集成目标保留，不承接不同工程师 flow workspace 的默认提交。
+
 ## 边界与约束
 
 **始终遵守：** 使用文件级 SHA-256 CAS，写入只读不可变 CAS 对象；将元数据访问保持在 `MetadataRepository` 端口之后；`params` 仍作为未来范围处理。原型可以使用本地 SQLite 保存元数据，但不能把共享 NAS SQLite 描述为生产架构。
@@ -28,8 +30,9 @@ context:
 | 场景 | 输入 / 状态 | 期望输出 / 行为 | 错误处理 |
 |------|-------------|-----------------|----------|
 | 初始化仓库 | `big repo init <root> --repo-id DemoChip` | 创建 `big.toml`、`.big/cas`、`.big/metadata` 和 main 分支元数据 | 已存在配置时保持幂等 |
-| 提交文件 | 在 workspace 内执行 `big commit --step place --inputs ... --outputs ...` | 将文件捕获到 staging/CAS，创建 version，并更新分支 head | input/output pattern 未匹配到文件时失败 |
-| 查看信息 | `big log`、`big show <version>`、`big diff old new` | 显示版本历史、manifest 摘要和 FileRef 差异 | version 未找到或前缀歧义时失败 |
+| 提交文件 | 在 workspace 内执行 `big commit --step place --inputs ... --outputs ...` | 将文件捕获到 staging/CAS，创建 version，并更新当前 workspace-private ref head | input/output pattern 未匹配到文件时失败 |
+| 隔离历史 | `alice/APR` 和 `shaqsnake/APR` 分别执行 commit | 默认写入 `workspace/default/alice/APR` 与 `workspace/default/shaqsnake/APR`，互不混入 `main` | 只有显式 `--branch main` 才写入共享 main |
+| 查看信息 | `big log`、`big show <version>`、`big diff old new` | 显示当前 workspace 历史、manifest 摘要和 FileRef 差异 | version 未找到或前缀歧义时失败 |
 
 </frozen-after-approval>
 
@@ -40,26 +43,33 @@ context:
 - `src/big/cas.py`：稳定 staging 复制、SHA-256 哈希计算、不可变 CAS 发布。
 - `src/big/metadata.py`：`MetadataRepository` 端口和 SQLite 适配器。
 - `src/big/cli.py`：原型的 Click 命令面。
-- `tests/test_cli_prototype.py`：端到端 CLI 覆盖。
+- `tests/test_cli_prototype.py`：端到端 CLI 覆盖，包括不同用户 workspace 的默认历史隔离。
+- `tools/create_manual_lab.py`：跨平台生成本地手工测试 fixture。
+- `Makefile`：WSL/Linux 下的 `install-dev`、`test`、`lab`、`smoke` 快捷入口。
 - `manual-lab/`：被忽略的本地手工测试 workspace，包含类似 EDA 的样例文件。
 - `docs/manual-test-prototype.md`：面向用户的手工测试步骤。
 
 ## 任务与验收
 
 **执行项：**
-- [x] `pyproject.toml`：添加包配置和脚本入口。
+- [x] `pyproject.toml`：添加包配置、dev 依赖和脚本入口。
 - [x] `src/big/*`：实现配置、CAS、元数据和 CLI。
 - [x] `tests/test_cli_prototype.py`：测试 init、commit、log、show、diff，以及缺失 input 的错误路径。
 - [x] `manual-lab/` 和 `docs/manual-test-prototype.md`：提供本地手工测试环境。
+- [x] `tools/create_manual_lab.py` 和 `Makefile`：提供 WSL/Linux 可复现验证入口。
 
 **验收标准：**
 - 给定一个全新的 lab root，当执行 `big repo init` 时，系统创建 `big.toml` 和 `.big/` 内部目录。
 - 给定样例 inputs/outputs，当执行 `big commit` 时，系统创建一个 version，并写入 CAS 对象。
+- 给定两个用户在不同 `/user/<username>/<flow>` 目录执行 commit，当不显式指定 `--branch` 时，系统将二者写入不同 workspace-private ref。
 - 给定两个 version，当执行 `big diff` 时，系统可以显示 input/output 哈希变化。
 
 ## 验证
 
 **命令：**
-- `python -m pytest`：已通过，2 个测试。
-- `$env:PYTHONPATH='D:\Code\App\big\src'; python -m big --help`：已通过，CLI help 可正常渲染。
+- `python -m pytest`：已通过，5 个测试。
+- `PYTHONPATH=src python -m big --help`：已通过，CLI help 可正常渲染。
 - 在 `manual-lab/data/ManualChip/user/alice/APR` 上进行手工验证：已通过 `repo init`、两次 `commit`、`log`、`show --full` 和 `diff --verbose`。
+- `make install-dev`：安装 editable package 和 `pytest` 等 dev 依赖。
+- `python tools/create_manual_lab.py --root manual-lab/data/WslChip --overwrite`：用于生成 WSL/Linux 手工测试 fixture。
+- `make smoke`：用于 WSL/Linux 下执行 init、commit、log 的最小 smoke 验证。

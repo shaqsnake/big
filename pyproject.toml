@@ -11,6 +11,11 @@ dependencies = [
   "click>=8.1,<9",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8,<10",
+]
+
 [project.scripts]
 big = "big.cli:main"
 

@@ -20,6 +20,10 @@ class VersionRecord:
     capture_mode: str
     review_state: str
     retention_state: str
+    work_root_id: str = ""
+    workspace_id: str = ""
+    user_name: str = ""
+    flow: str = ""
 
 
 @dataclass(frozen=True)
@@ -75,7 +79,11 @@ class SQLiteMetadataRepository(MetadataRepository):
                     manifest_hash TEXT NOT NULL,
                     capture_mode TEXT NOT NULL,
                     review_state TEXT NOT NULL,
-                    retention_state TEXT NOT NULL
+                    retention_state TEXT NOT NULL,
+                    work_root_id TEXT NOT NULL DEFAULT '',
+                    workspace_id TEXT NOT NULL DEFAULT '',
+                    user_name TEXT NOT NULL DEFAULT '',
+                    flow TEXT NOT NULL DEFAULT ''
                 );
 
                 CREATE TABLE IF NOT EXISTS file_refs (
@@ -100,6 +108,10 @@ class SQLiteMetadataRepository(MetadataRepository):
                 "INSERT OR IGNORE INTO branches(name, head_version_id) VALUES (?, NULL)",
                 ("main",),
             )
+            _ensure_column(conn, "versions", "work_root_id", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "versions", "workspace_id", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "versions", "user_name", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "versions", "flow", "TEXT NOT NULL DEFAULT ''")
 
     def get_branch_head(self, branch: str) -> str | None:
         with self.connect() as conn:
@@ -123,8 +135,8 @@ class SQLiteMetadataRepository(MetadataRepository):
                 INSERT INTO versions(
                     id, branch, parent_id, step, message, author, created_at,
                     recipe_hash, manifest_hash, capture_mode, review_state,
-                    retention_state
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    retention_state, work_root_id, workspace_id, user_name, flow
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.id,
@@ -139,6 +151,10 @@ class SQLiteMetadataRepository(MetadataRepository):
                     record.capture_mode,
                     record.review_state,
                     record.retention_state,
+                    record.work_root_id,
+                    record.workspace_id,
+                    record.user_name,
+                    record.flow,
                 ),
             )
             conn.executemany(
@@ -232,4 +248,27 @@ def _version_from_row(row: sqlite3.Row) -> VersionRecord:
         capture_mode=row["capture_mode"],
         review_state=row["review_state"],
         retention_state=row["retention_state"],
+        work_root_id=_row_value(row, "work_root_id"),
+        workspace_id=_row_value(row, "workspace_id"),
+        user_name=_row_value(row, "user_name"),
+        flow=_row_value(row, "flow"),
     )
+
+
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    column_definition: str,
+) -> None:
+    columns = {
+        row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})")
+    }
+    if column_name not in columns:
+        conn.execute(
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"
+        )
+
+
+def _row_value(row: sqlite3.Row, column_name: str, default: str = "") -> str:
+    return row[column_name] if column_name in row.keys() else default

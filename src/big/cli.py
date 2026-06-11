@@ -17,7 +17,7 @@ from .config import (
     CONFIG_NAME,
     ensure_repo_dirs,
     find_config,
-    resolve_work_root,
+    resolve_workspace_context,
     write_main_config,
 )
 from .metadata import FileRef, SQLiteMetadataRepository, VersionRecord
@@ -186,7 +186,11 @@ def repo_init(path: Path, repo_id: str, integration: str) -> None:
     help="Output glob patterns. Repeat the option or separate patterns with semicolons.",
 )
 @click.option("--message", "-m", default="", help="Commit message.")
-@click.option("--branch", default="main", show_default=True)
+@click.option(
+    "--branch",
+    default=None,
+    help="Explicit branch/ref. Defaults to the current workspace-private ref.",
+)
 @click.option("--verbose", is_flag=True, help="Show manifest summary details.")
 def commit_cmd(
     step: str,
@@ -199,7 +203,11 @@ def commit_cmd(
     """Capture inputs/outputs into CAS and create a version manifest."""
     workspace = Path.cwd().resolve()
     config, metadata = _repo_from_cwd()
-    work_root = resolve_work_root(config, workspace)
+    try:
+        workspace_context = resolve_workspace_context(config, workspace)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    branch = branch or workspace_context.default_branch
     inputs = _resolve_patterns(input_patterns, workspace, "input")
     outputs = _resolve_patterns(output_patterns, workspace, "output")
 
@@ -226,6 +234,7 @@ def commit_cmd(
             "schema": 1,
             "repo_id": config.repo_id,
             "branch": branch,
+            "workspace_id": workspace_context.workspace_id,
             "step": step,
             "files": [asdict(item) for item in sorted(all_refs, key=lambda x: (x.role, x.path))],
         }
@@ -247,12 +256,17 @@ def commit_cmd(
         capture_mode="best_effort",
         review_state="Exploring",
         retention_state="resident",
+        work_root_id=workspace_context.work_root.id,
+        workspace_id=workspace_context.workspace_id,
+        user_name=workspace_context.user,
+        flow=workspace_context.flow,
     )
     metadata.create_version(record, all_refs)
     shutil.rmtree(staging_root, ignore_errors=True)
 
     click.echo(f"version: {record.id}")
     click.echo(f"branch: {branch}")
+    click.echo(f"workspace: {workspace_context.workspace_id}")
     click.echo(f"step: {step}")
     click.echo(f"inputs: {len(inputs)}")
     click.echo(f"outputs: {len(outputs)}")
@@ -260,17 +274,29 @@ def commit_cmd(
     click.echo(f"capture_mode: {record.capture_mode}")
     click.echo(f"state: [{record.review_state}/{record.retention_state}]")
     if verbose:
-        click.echo(f"work_root: {work_root.id} {work_root.path}")
+        click.echo(
+            f"work_root: {workspace_context.work_root.id} "
+            f"{workspace_context.work_root.path}"
+        )
         click.echo(f"manifest_hash: {manifest_hash}")
 
 
 @main.command("log")
-@click.argument("branch", required=False, default="main")
+@click.argument("branch", required=False)
 @click.option("--limit", default=20, show_default=True, type=click.IntRange(min=1))
 @click.option("--verbose", is_flag=True)
-def log_cmd(branch: str, limit: int, verbose: bool) -> None:
+def log_cmd(branch: str | None, limit: int, verbose: bool) -> None:
     """Show version history for a branch."""
-    _, metadata = _repo_from_cwd()
+    config, metadata = _repo_from_cwd()
+    if branch is None:
+        try:
+            workspace_context = resolve_workspace_context(config, Path.cwd())
+        except ValueError as exc:
+            raise click.ClickException(
+                f"{exc}; pass an explicit branch/ref to log"
+            ) from exc
+        branch = workspace_context.default_branch
+
     versions = metadata.list_versions(branch, limit=limit)
     if not versions:
         click.echo(f"No versions visible on branch {branch}.")
@@ -282,6 +308,7 @@ def log_cmd(branch: str, limit: int, verbose: bool) -> None:
         )
         if verbose:
             click.echo(f"  parent: {item.parent_id or '-'}")
+            click.echo(f"  workspace: {item.workspace_id or '-'}")
             click.echo(f"  recipe_hash: {_short_hash(item.recipe_hash)}")
             click.echo(f"  capture_mode: {item.capture_mode}")
 
@@ -307,6 +334,8 @@ def show_cmd(version: str, verbose: bool, show_full: bool) -> None:
     click.echo(f"step: {record.step}")
     click.echo(f"author: {record.author}")
     click.echo(f"created_at: {record.created_at}")
+    if record.workspace_id:
+        click.echo(f"workspace: {record.workspace_id}")
     click.echo(f"state: [{record.review_state}/{record.retention_state}]")
     click.echo(f"inputs: {len(inputs)}")
     click.echo(f"outputs: {len(outputs)}")

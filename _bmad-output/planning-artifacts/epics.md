@@ -400,7 +400,8 @@ big repo init /data/<ProjectName>_3D \
 **When** 工程师执行 `big` 命令
 **Then** 系统通过向上查找最近的 `big.toml` 解析出所属逻辑仓库、work root、用户和 flow workspace
 **And** 四个 root 中任一子目录执行 `big` 命令都解析到同一个逻辑 BIG 仓库
-**And** 物理目录名 `APR/SYN/PV/STA/PI` 不被默认解释为 branch，branch/version 由 BIG 元数据单独记录。
+**And** 物理目录名 `APR/SYN/PV/STA/PI` 不被默认解释为 branch，branch/version 由 BIG 元数据单独记录
+**And** 在未显式 checkout 或指定命名 branch 前，当前上下文的默认提交目标是由 work root、用户和 flow workspace 派生的 workspace-private ref，例如 `workspace/<work_root_id>/<Username>/<Flow>`，不得默认汇聚到共享 `main`。
 
 **Given** 一个需要写元数据的 `big` 命令
 **When** 命令执行
@@ -591,7 +592,9 @@ big repo init /data/<ProjectName>_3D \
 **Given** 工程师位于已登记 work root 下的 flow workspace
 **When** 执行 `big commit --step <step> --inputs <path-or-glob> --outputs <path-or-glob>`
 **Then** 系统创建一个新的制品集版本
-**And** 该版本记录 step 名称、work root、flow workspace、用户、提交时间和 commit message。
+**And** 该版本记录 step 名称、work root、flow workspace、用户、提交时间和 commit message
+**And** 若用户未显式指定 `--branch` 或未处于已 checkout 的命名 branch 上，系统将该版本追加到当前 workspace-private ref
+**And** 不同用户或不同 flow workspace 的默认 commit 历史彼此隔离，不得自动混入共享 `main`。
 
 **Given** 工程师指定了 inputs 和 outputs
 **When** 系统解析 commit 参数
@@ -1159,8 +1162,9 @@ big repo init /data/<ProjectName>_3D \
 
 **Given** 工程师位于 BIG 管理的稳定工作目录中
 **When** 执行 `big log`
-**Then** 系统解析当前逻辑仓库和当前 branch
-**And** 按时间或拓扑顺序显示当前 branch head 可达的制品集版本历史。
+**Then** 系统解析当前逻辑仓库、work root、用户、flow workspace 和当前 ref
+**And** 如果用户未显式 checkout 命名 branch，则当前 ref 为该 workspace-private ref
+**And** 按时间或拓扑顺序显示当前 ref head 可达的制品集版本历史，不混入其他用户或其他 flow workspace 的默认历史。
 
 **Given** 工程师想查看指定分支历史
 **When** 执行 `big log <branch>`
