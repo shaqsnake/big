@@ -161,6 +161,46 @@ big log
 - 显式执行 `big log workspace/default/alice/APR` 才会查看 `alice/APR` 的历史。
 - `big log main` 默认为空，除非你显式执行过 `big commit --branch main ...`。
 
+### 用例 5：从当前 workspace 创建命名 branch
+
+回到 alice 的 workspace：
+
+```bash
+cd /mnt/d/Code/App/big/manual-lab/data/WslChip/user/alice/APR
+```
+
+从当前 workspace-private ref 的 head 创建命名 branch：
+
+```bash
+big branch create feature/place
+```
+
+期望：
+
+- 输出 `branch: feature/place`
+- 输出 `source_ref: workspace/default/alice/APR`
+- 输出的 `head` 等于 alice 当前 workspace ref 的 head version。
+
+查看命名 branch：
+
+```bash
+big branch list
+```
+
+期望：
+
+- 显示 `main`
+- 显示 `feature/place`
+- 不把 `workspace/default/alice/APR` 当作普通命名 branch 展示。
+
+如果需要调试所有内部 ref：
+
+```bash
+big branch list --all
+```
+
+此时会额外显示 workspace-private ref。
+
 ## 当前原型范围
 
 已实现：
@@ -170,6 +210,8 @@ big log
 - `big log`
 - `big show`
 - `big diff`
+- `big branch create`
+- `big branch list`
 
 暂未实现：
 

@@ -7,6 +7,7 @@ import glob
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import uuid
 
@@ -21,6 +22,9 @@ from .config import (
     write_main_config,
 )
 from .metadata import FileRef, SQLiteMetadataRepository, VersionRecord
+
+
+BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 
 
 def _repo_from_cwd() -> tuple[object, SQLiteMetadataRepository]:
@@ -57,6 +61,10 @@ def _semantic_role(role: str, path: Path) -> str:
     if suffix in {".rpt", ".log"}:
         return "report_or_log"
     return role
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _expand_pattern_args(patterns: tuple[str, ...]) -> list[str]:
@@ -130,6 +138,40 @@ def _capture_files(
     return refs
 
 
+def _validate_branch_name(branch_name: str) -> None:
+    if branch_name == "main" or branch_name.startswith("workspace/"):
+        raise click.ClickException(f"Reserved branch name: {branch_name}")
+    if (
+        not BRANCH_NAME_RE.match(branch_name)
+        or branch_name.endswith("/")
+        or "//" in branch_name
+    ):
+        raise click.ClickException(f"Invalid branch name: {branch_name}")
+
+
+def _current_workspace_branch(config: object) -> str:
+    try:
+        return resolve_workspace_context(config, Path.cwd()).default_branch
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _resolve_source_ref(
+    metadata: SQLiteMetadataRepository,
+    source_ref: str,
+) -> tuple[str, str]:
+    branch = metadata.get_branch(source_ref)
+    if branch is not None:
+        if branch.head_version_id is None:
+            raise click.ClickException(f"Source branch has no head version: {source_ref}")
+        return source_ref, branch.head_version_id
+
+    version = metadata.get_version(source_ref)
+    if version is None:
+        raise click.ClickException(f"Source ref not found or ambiguous: {source_ref}")
+    return version.id, version.id
+
+
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def main() -> None:
     """BIG prototype CLI for EDA artifact snapshots."""
@@ -138,6 +180,11 @@ def main() -> None:
 @main.group()
 def repo() -> None:
     """Repository administration commands."""
+
+
+@main.group()
+def branch() -> None:
+    """Branch metadata commands."""
 
 
 @repo.command("init")
@@ -167,6 +214,64 @@ def repo_init(path: Path, repo_id: str, integration: str) -> None:
     click.echo(f"repo: {config.repo_id}")
     click.echo(f"home: {config.home}")
     click.echo(f"metadata: {config.metadata_db}")
+
+
+@branch.command("create")
+@click.argument("branch_name")
+@click.option(
+    "--from",
+    "source_ref",
+    default=None,
+    help="Source branch/ref or version. Defaults to current workspace ref.",
+)
+def branch_create_cmd(branch_name: str, source_ref: str | None) -> None:
+    """Create a named branch from a source ref."""
+    _validate_branch_name(branch_name)
+    config, metadata = _repo_from_cwd()
+    if metadata.get_branch(branch_name) is not None:
+        raise click.ClickException(f"Branch already exists: {branch_name}")
+
+    source_ref = source_ref or _current_workspace_branch(config)
+    resolved_source, source_version_id = _resolve_source_ref(metadata, source_ref)
+    created_at = _utc_now()
+    try:
+        metadata.create_branch(
+            name=branch_name,
+            head_version_id=source_version_id,
+            kind="named",
+            created_at=created_at,
+            source_ref=resolved_source,
+            source_version_id=source_version_id,
+            owner=getpass.getuser(),
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"branch: {branch_name}")
+    click.echo(f"head: {source_version_id}")
+    click.echo(f"source_ref: {resolved_source}")
+    click.echo(f"kind: named")
+
+
+@branch.command("list")
+@click.option(
+    "--all",
+    "include_workspace",
+    is_flag=True,
+    help="Include workspace-private refs.",
+)
+def branch_list_cmd(include_workspace: bool) -> None:
+    """List branches and refs."""
+    _, metadata = _repo_from_cwd()
+    branches = metadata.list_branches(include_workspace=include_workspace)
+    if not branches:
+        click.echo("No branches found.")
+        return
+    for item in branches:
+        head = item.head_version_id or "-"
+        owner = item.owner or "-"
+        source = item.source_ref or "-"
+        click.echo(f"{item.kind} {item.name} {head} {owner} {source}")
 
 
 @main.command("commit")
@@ -250,7 +355,7 @@ def commit_cmd(
         step=step,
         message=message,
         author=getpass.getuser(),
-        created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        created_at=_utc_now(),
         recipe_hash=recipe_hash,
         manifest_hash=manifest_hash,
         capture_mode="best_effort",

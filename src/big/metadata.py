@@ -36,6 +36,17 @@ class FileRef:
     format_hint: str
 
 
+@dataclass(frozen=True)
+class BranchRecord:
+    name: str
+    head_version_id: str | None
+    kind: str
+    created_at: str
+    source_ref: str
+    source_version_id: str
+    owner: str
+
+
 class MetadataRepository:
     def init_schema(self) -> None:
         raise NotImplementedError
@@ -64,7 +75,12 @@ class SQLiteMetadataRepository(MetadataRepository):
                 """
                 CREATE TABLE IF NOT EXISTS branches (
                     name TEXT PRIMARY KEY,
-                    head_version_id TEXT
+                    head_version_id TEXT,
+                    kind TEXT NOT NULL DEFAULT 'named',
+                    created_at TEXT NOT NULL DEFAULT '',
+                    source_ref TEXT NOT NULL DEFAULT '',
+                    source_version_id TEXT NOT NULL DEFAULT '',
+                    owner TEXT NOT NULL DEFAULT ''
                 );
 
                 CREATE TABLE IF NOT EXISTS versions (
@@ -104,9 +120,27 @@ class SQLiteMetadataRepository(MetadataRepository):
                     ON file_refs(cas_hash);
                 """
             )
+            _ensure_column(conn, "branches", "kind", "TEXT NOT NULL DEFAULT 'named'")
+            _ensure_column(conn, "branches", "created_at", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "branches", "source_ref", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(
+                conn,
+                "branches",
+                "source_version_id",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            _ensure_column(conn, "branches", "owner", "TEXT NOT NULL DEFAULT ''")
             conn.execute(
-                "INSERT OR IGNORE INTO branches(name, head_version_id) VALUES (?, NULL)",
+                """
+                INSERT OR IGNORE INTO branches(
+                    name, head_version_id, kind, created_at
+                ) VALUES (?, NULL, 'main', '')
+                """,
                 ("main",),
+            )
+            conn.execute("UPDATE branches SET kind = 'main' WHERE name = 'main'")
+            conn.execute(
+                "UPDATE branches SET kind = 'workspace' WHERE name LIKE 'workspace/%'"
             )
             _ensure_column(conn, "versions", "work_root_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "versions", "workspace_id", "TEXT NOT NULL DEFAULT ''")
@@ -120,6 +154,61 @@ class SQLiteMetadataRepository(MetadataRepository):
             ).fetchone()
             return None if row is None else row["head_version_id"]
 
+    def get_branch(self, branch: str) -> BranchRecord | None:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM branches WHERE name = ?", (branch,)
+            ).fetchone()
+        return None if row is None else _branch_from_row(row)
+
+    def create_branch(
+        self,
+        name: str,
+        head_version_id: str,
+        kind: str,
+        created_at: str,
+        source_ref: str,
+        source_version_id: str,
+        owner: str,
+    ) -> None:
+        with self.connect() as conn:
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO branches(
+                        name, head_version_id, kind, created_at, source_ref,
+                        source_version_id, owner
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        name,
+                        head_version_id,
+                        kind,
+                        created_at,
+                        source_ref,
+                        source_version_id,
+                        owner,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise ValueError(f"Branch already exists: {name}") from exc
+
+    def list_branches(self, include_workspace: bool = False) -> list[BranchRecord]:
+        with self.connect() as conn:
+            if include_workspace:
+                rows = conn.execute(
+                    "SELECT * FROM branches ORDER BY kind, name"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM branches
+                    WHERE kind != 'workspace'
+                    ORDER BY kind, name
+                    """
+                ).fetchall()
+        return [_branch_from_row(row) for row in rows]
+
     def create_version(
         self,
         record: VersionRecord,
@@ -127,8 +216,17 @@ class SQLiteMetadataRepository(MetadataRepository):
     ) -> None:
         with self.connect() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO branches(name, head_version_id) VALUES (?, NULL)",
-                (record.branch,),
+                """
+                INSERT OR IGNORE INTO branches(
+                    name, head_version_id, kind, created_at, owner
+                ) VALUES (?, NULL, ?, ?, ?)
+                """,
+                (
+                    record.branch,
+                    _branch_kind(record.branch),
+                    record.created_at,
+                    record.author,
+                ),
             )
             conn.execute(
                 """
@@ -253,6 +351,26 @@ def _version_from_row(row: sqlite3.Row) -> VersionRecord:
         user_name=_row_value(row, "user_name"),
         flow=_row_value(row, "flow"),
     )
+
+
+def _branch_from_row(row: sqlite3.Row) -> BranchRecord:
+    return BranchRecord(
+        name=row["name"],
+        head_version_id=row["head_version_id"],
+        kind=_row_value(row, "kind", "named"),
+        created_at=_row_value(row, "created_at"),
+        source_ref=_row_value(row, "source_ref"),
+        source_version_id=_row_value(row, "source_version_id"),
+        owner=_row_value(row, "owner"),
+    )
+
+
+def _branch_kind(branch_name: str) -> str:
+    if branch_name == "main":
+        return "main"
+    if branch_name.startswith("workspace/"):
+        return "workspace"
+    return "named"
 
 
 def _ensure_column(

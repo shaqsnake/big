@@ -57,6 +57,36 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert log.exit_code == 0, log.output
         assert first_version.group(1) in log.output
 
+        branch_create = runner.invoke(main, ["branch", "create", "feature/place"])
+        assert branch_create.exit_code == 0, branch_create.output
+        assert "branch: feature/place" in branch_create.output
+        assert f"head: {first_version.group(1)}" in branch_create.output
+        assert "source_ref: workspace/default/alice/APR" in branch_create.output
+
+        branch_from_version = runner.invoke(
+            main,
+            [
+                "branch",
+                "create",
+                "feature/from-version",
+                "--from",
+                first_version.group(1),
+            ],
+        )
+        assert branch_from_version.exit_code == 0, branch_from_version.output
+        assert "branch: feature/from-version" in branch_from_version.output
+        assert f"source_ref: {first_version.group(1)}" in branch_from_version.output
+
+        branch_list = runner.invoke(main, ["branch", "list"])
+        assert branch_list.exit_code == 0, branch_list.output
+        assert f"named feature/place {first_version.group(1)}" in branch_list.output
+        assert f"named feature/from-version {first_version.group(1)}" in branch_list.output
+        assert "workspace workspace/default/alice/APR" not in branch_list.output
+
+        branch_list_all = runner.invoke(main, ["branch", "list", "--all"])
+        assert branch_list_all.exit_code == 0, branch_list_all.output
+        assert "workspace workspace/default/alice/APR" in branch_list_all.output
+
         show = runner.invoke(main, ["show", first_version.group(1), "--full"])
         assert show.exit_code == 0, show.output
         assert "inputs: 2" in show.output
