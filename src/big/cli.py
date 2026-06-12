@@ -274,6 +274,39 @@ def branch_list_cmd(include_workspace: bool) -> None:
         click.echo(f"{item.kind} {item.name} {head} {owner} {source}")
 
 
+@branch.command("show")
+@click.argument("branch_name")
+def branch_show_cmd(branch_name: str) -> None:
+    """Show branch/ref metadata."""
+    _, metadata = _repo_from_cwd()
+    record = metadata.get_branch(branch_name)
+    if record is None:
+        raise click.ClickException(f"Branch/ref not found: {branch_name}")
+
+    head = record.head_version_id or "-"
+    click.echo(f"branch: {record.name}")
+    click.echo(f"kind: {record.kind}")
+    click.echo(f"head: {head}")
+    click.echo(f"owner: {record.owner or '-'}")
+    click.echo(f"created_at: {record.created_at or '-'}")
+    click.echo(f"source_ref: {record.source_ref or '-'}")
+    click.echo(f"source_version: {record.source_version_id or '-'}")
+
+    if record.head_version_id is None:
+        return
+
+    version = metadata.get_version(record.head_version_id)
+    if version is None:
+        click.echo("head_record: missing")
+        return
+
+    click.echo(f"head_step: {version.step}")
+    click.echo(f"head_workspace: {version.workspace_id or '-'}")
+    click.echo(f"head_state: [{version.review_state}/{version.retention_state}]")
+    if version.message:
+        click.echo(f"head_message: {version.message}")
+
+
 @main.command("commit")
 @click.option("--step", required=True, help="EDA step name, for example place.")
 @click.option(

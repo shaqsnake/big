@@ -185,6 +185,7 @@ big branch create feature/place
 
 ```bash
 big branch list
+big branch show feature/place
 ```
 
 期望：
@@ -192,11 +193,13 @@ big branch list
 - 显示 `main`
 - 显示 `feature/place`
 - 不把 `workspace/default/alice/APR` 当作普通命名 branch 展示。
+- `big branch show feature/place` 展示 branch kind、head version、source ref、head workspace 和 head state。
 
 如果需要调试所有内部 ref：
 
 ```bash
 big branch list --all
+big branch show workspace/default/alice/APR
 ```
 
 此时会额外显示 workspace-private ref。
@@ -212,6 +215,7 @@ big branch list --all
 - `big diff`
 - `big branch create`
 - `big branch list`
+- `big branch show`
 
 暂未实现：
 

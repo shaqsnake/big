@@ -77,6 +77,24 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "branch: feature/from-version" in branch_from_version.output
         assert f"source_ref: {first_version.group(1)}" in branch_from_version.output
 
+        branch_show = runner.invoke(main, ["branch", "show", "feature/place"])
+        assert branch_show.exit_code == 0, branch_show.output
+        assert "branch: feature/place" in branch_show.output
+        assert "kind: named" in branch_show.output
+        assert f"head: {first_version.group(1)}" in branch_show.output
+        assert "source_ref: workspace/default/alice/APR" in branch_show.output
+        assert "head_step: place" in branch_show.output
+        assert "head_workspace: user/alice/APR" in branch_show.output
+        assert "head_message: initial place snapshot" in branch_show.output
+
+        workspace_ref_show = runner.invoke(
+            main, ["branch", "show", "workspace/default/alice/APR"]
+        )
+        assert workspace_ref_show.exit_code == 0, workspace_ref_show.output
+        assert "branch: workspace/default/alice/APR" in workspace_ref_show.output
+        assert "kind: workspace" in workspace_ref_show.output
+        assert f"head: {first_version.group(1)}" in workspace_ref_show.output
+
         branch_list = runner.invoke(main, ["branch", "list"])
         assert branch_list.exit_code == 0, branch_list.output
         assert f"named feature/place {first_version.group(1)}" in branch_list.output
@@ -239,5 +257,24 @@ def test_default_workspace_histories_are_isolated_by_user_and_flow(
         main_log = runner.invoke(main, ["log", "main"])
         assert main_log.exit_code == 0, main_log.output
         assert "No versions visible on branch main." in main_log.output
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_branch_show_rejects_unknown_ref(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    workspace.mkdir(parents=True)
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        result = runner.invoke(main, ["branch", "show", "feature/missing"])
+        assert result.exit_code != 0
+        assert "Branch/ref not found: feature/missing" in result.output
     finally:
         os.chdir(old_cwd)
