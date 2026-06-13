@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、查看 parent-chain lineage、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、确认 `main` 仍为空，并检查 repo stats。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、确认 `main` 仍为空，并检查 repo stats。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
@@ -167,7 +167,37 @@ big repo verify
 - `big verify <version>` 输出 `integrity: ok`，表示该 version manifest 引用的 CAS 对象存在、大小一致且 SHA-256 校验通过。
 - `big repo verify` 输出 `integrity: ok`，表示仓库内所有 manifest 引用的 CAS 对象都通过完整性检查；如果失败，可加 `--full` 查看具体 version 和 FileRef。
 
-### 用例 3：修改后再次提交并 diff
+### 用例 3：手动晋升生命周期评审状态
+
+将当前 version 从 `Exploring` 晋升为 `Candidate`：
+
+```bash
+big promote <version> --to Candidate --message 'ready for review'
+big show <version>
+big lifecycle events <version>
+```
+
+期望：
+
+- `big promote` 输出 `old_state: [Exploring/resident]`
+- `big promote` 输出 `new_state: [Candidate/resident]`
+- `retention_state` 保持 `resident`，不会回收或移动 CAS 对象
+- `big show <version>` 展示 `state: [Candidate/resident]`
+- `big lifecycle events <version>` 展示 `Exploring->Candidate` 和原因
+- 当前原型只记录状态迁移事件；`candidate_outbox: not-implemented` 表示还没有触发 Growth 阶段的 Candidate 交付 outbox。
+
+晋升到 `Golden` 需要显式确认：
+
+```bash
+big promote <version> --to Golden --confirm GOLDEN --message 'tapeout approved'
+```
+
+期望：
+
+- 未提供 `--confirm GOLDEN` 时命令失败
+- 已经处于更高评审阶段的 version 不能被降级到更低阶段
+
+### 用例 4：修改后再次提交并 diff
 
 修改文件：
 
@@ -197,7 +227,7 @@ big diff <old-version> <new-version> --verbose
 - diff 中出现 `~ input inputs/top.v`
 - diff 中出现 `~ output outputs/top_placed.def`
 
-### 用例 4：只移动当前 ref head 的 reset
+### 用例 5：只移动当前 ref head 的 reset
 
 将当前 workspace-private ref 回退到第一次提交：
 
@@ -236,7 +266,7 @@ big reset <old-version>
 
 期望输出 `reset: no-op`。
 
-### 用例 5：验证两个工程师目录互相隔离
+### 用例 6：验证两个工程师目录互相隔离
 
 进入另一个用户的同名 flow workspace：
 
@@ -266,7 +296,7 @@ big log
 - 显式执行 `big log workspace/default/alice/APR` 才会查看 `alice/APR` 的历史。
 - `big log main` 默认为空，除非你显式执行过 `big commit --branch main ...`。
 
-### 用例 6：从当前 workspace 创建命名 branch
+### 用例 7：从当前 workspace 创建命名 branch
 
 回到 alice 的 workspace：
 
@@ -309,7 +339,7 @@ big branch show workspace/default/alice/APR
 
 此时会额外显示 workspace-private ref。
 
-### 用例 7：checkout 目标路径、copy-only 物化和 shell 集成
+### 用例 8：checkout 目标路径、copy-only 物化和 shell 集成
 
 当前原型支持两步验证 checkout：先用 `--plan` 确认目标 branch、head version 和稳定目录路径；再执行不带 `--plan` 的 `big checkout <branch>`，把该 version 的 FileRef 从 CAS 复制到用户私有目标目录。CLI 子进程本身不能切换父 shell 的当前目录；未启用 shell 集成时，需要手工执行输出中的 `cd -- <target-path>`。启用 shell 集成后，wrapper 会在 checkout 成功物化或复用目录后自动进入目标目录。
 
@@ -409,6 +439,8 @@ pwd
 - `big show`
 - `big verify`
 - `big diff`
+- `big promote`
+- `big lifecycle events`
 - `big reset`
 - `big checkout <branch>`
 - `big checkout <branch> --plan`

@@ -130,6 +130,30 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     _expect_contains(alice_lineage, "truncated: no")
     _expect_contains(alice_lineage, f"0 {alice_version} parent=-")
 
+    alice_promote = _run_big(
+        [
+            "promote",
+            alice_version,
+            "--to",
+            "Candidate",
+            "--message",
+            "smoke candidate",
+        ],
+        alice_workspace,
+        env,
+    )
+    _expect_contains(alice_promote, "old_state: [Exploring/resident]")
+    _expect_contains(alice_promote, "new_state: [Candidate/resident]")
+    _expect_contains(alice_promote, "candidate_outbox: not-implemented")
+
+    lifecycle_events = _run_big(
+        ["lifecycle", "events", alice_version],
+        alice_workspace,
+        env,
+    )
+    _expect_contains(lifecycle_events, f"{alice_version} Exploring->Candidate")
+    _expect_contains(lifecycle_events, "resident->resident")
+
     _run_big(["branch", "create", "feature/place"], alice_workspace, env)
 
     checkout_plan = _run_big(["checkout", "feature/place", "--plan"], alice_workspace, env)

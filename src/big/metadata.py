@@ -60,6 +60,19 @@ class BranchEvent:
 
 
 @dataclass(frozen=True)
+class LifecycleEvent:
+    id: int
+    version_id: str
+    old_review_state: str
+    new_review_state: str
+    old_retention_state: str
+    new_retention_state: str
+    actor: str
+    created_at: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class RetentionStorageSummary:
     retention_state: str
     versions: int
@@ -154,12 +167,27 @@ class SQLiteMetadataRepository(MetadataRepository):
                     reason TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS lifecycle_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    version_id TEXT NOT NULL,
+                    old_review_state TEXT NOT NULL,
+                    new_review_state TEXT NOT NULL,
+                    old_retention_state TEXT NOT NULL,
+                    new_retention_state TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    FOREIGN KEY (version_id) REFERENCES versions(id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_versions_branch_created
                     ON versions(branch, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_file_refs_hash
                     ON file_refs(cas_hash);
                 CREATE INDEX IF NOT EXISTS idx_branch_events_branch_created
                     ON branch_events(branch, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_lifecycle_events_version_created
+                    ON lifecycle_events(version_id, created_at DESC);
                 """
             )
             _ensure_column(conn, "branches", "kind", "TEXT NOT NULL DEFAULT 'named'")
@@ -293,6 +321,77 @@ class SQLiteMetadataRepository(MetadataRepository):
                 (branch, limit),
             ).fetchall()
         return [_branch_event_from_row(row) for row in rows]
+
+    def update_review_state(
+        self,
+        version_id: str,
+        expected_old_review_state: str,
+        new_review_state: str,
+        actor: str,
+        created_at: str,
+        reason: str,
+    ) -> None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT review_state, retention_state
+                FROM versions
+                WHERE id = ?
+                """,
+                (version_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Version not found: {version_id}")
+
+            old_review_state = row["review_state"]
+            old_retention_state = row["retention_state"]
+            if old_review_state != expected_old_review_state:
+                raise ValueError(f"Version review state changed: {version_id}")
+
+            conn.execute(
+                """
+                UPDATE versions
+                SET review_state = ?
+                WHERE id = ? AND review_state = ?
+                """,
+                (new_review_state, version_id, expected_old_review_state),
+            )
+            conn.execute(
+                """
+                INSERT INTO lifecycle_events(
+                    version_id, old_review_state, new_review_state,
+                    old_retention_state, new_retention_state, actor, created_at,
+                    reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    version_id,
+                    old_review_state,
+                    new_review_state,
+                    old_retention_state,
+                    old_retention_state,
+                    actor,
+                    created_at,
+                    reason,
+                ),
+            )
+
+    def list_lifecycle_events(
+        self,
+        version_id: str,
+        limit: int = 20,
+    ) -> list[LifecycleEvent]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM lifecycle_events
+                WHERE version_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (version_id, limit),
+            ).fetchall()
+        return [_lifecycle_event_from_row(row) for row in rows]
 
     def storage_summary(self) -> StorageSummary:
         with self.connect() as conn:
@@ -544,6 +643,20 @@ def _branch_event_from_row(row: sqlite3.Row) -> BranchEvent:
         event_type=row["event_type"],
         old_head_version_id=row["old_head_version_id"],
         new_head_version_id=row["new_head_version_id"],
+        actor=row["actor"],
+        created_at=row["created_at"],
+        reason=row["reason"],
+    )
+
+
+def _lifecycle_event_from_row(row: sqlite3.Row) -> LifecycleEvent:
+    return LifecycleEvent(
+        id=row["id"],
+        version_id=row["version_id"],
+        old_review_state=row["old_review_state"],
+        new_review_state=row["new_review_state"],
+        old_retention_state=row["old_retention_state"],
+        new_retention_state=row["new_retention_state"],
         actor=row["actor"],
         created_at=row["created_at"],
         reason=row["reason"],

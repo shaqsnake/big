@@ -36,6 +36,8 @@ from .metadata import FileRef, SQLiteMetadataRepository, VersionRecord
 
 
 BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
+REVIEW_STATES = ("Exploring", "Candidate", "Pinned", "Golden")
+REVIEW_STATE_ORDER = {state: index for index, state in enumerate(REVIEW_STATES)}
 
 
 def _repo_from_cwd() -> tuple[object, SQLiteMetadataRepository]:
@@ -61,6 +63,16 @@ def _json_hash(payload: object) -> str:
 def _format_hint(path: Path) -> str:
     suffix = path.suffix.lower().lstrip(".")
     return suffix or "raw"
+
+
+def _canonical_review_state(value: str) -> str:
+    for state in REVIEW_STATES:
+        if value.lower() == state.lower():
+            return state
+    choices = ", ".join(REVIEW_STATES)
+    raise click.ClickException(
+        f"Unknown review state: {value}; expected one of {choices}"
+    )
 
 
 def _semantic_role(role: str, path: Path) -> str:
@@ -484,6 +496,11 @@ def branch() -> None:
     """Branch metadata commands."""
 
 
+@main.group()
+def lifecycle() -> None:
+    """Lifecycle metadata commands."""
+
+
 @repo.command("init")
 @click.argument("path", type=click.Path(path_type=Path))
 @click.option("--repo-id", required=True, help="Logical BIG repository id.")
@@ -894,6 +911,98 @@ def reset_cmd(version: str, message: str) -> None:
     click.echo(f"new_head: {target.id}")
     click.echo("reset: moved")
     click.echo("workspace_files: unchanged")
+
+
+@main.command("promote")
+@click.argument("version")
+@click.option(
+    "--to",
+    "target_state",
+    required=True,
+    type=click.Choice(REVIEW_STATES, case_sensitive=False),
+    help="Target review state.",
+)
+@click.option(
+    "--message",
+    "-m",
+    default="",
+    help="Reason for the lifecycle transition.",
+)
+@click.option(
+    "--confirm",
+    default="",
+    help="Required as GOLDEN when promoting to Golden.",
+)
+def promote_cmd(version: str, target_state: str, message: str, confirm: str) -> None:
+    """Promote a version's review state without changing file residency."""
+    _, metadata = _repo_from_cwd()
+    record = metadata.get_version(version)
+    if record is None:
+        raise click.ClickException(f"Version not found or ambiguous: {version}")
+
+    target_state = _canonical_review_state(target_state)
+    current_rank = REVIEW_STATE_ORDER[record.review_state]
+    target_rank = REVIEW_STATE_ORDER[target_state]
+    if target_rank < current_rank:
+        raise click.ClickException(
+            "Review state demotion is not supported in this prototype"
+        )
+
+    if target_state == record.review_state:
+        click.echo(f"version: {record.id}")
+        click.echo(f"old_state: [{record.review_state}/{record.retention_state}]")
+        click.echo(f"new_state: [{record.review_state}/{record.retention_state}]")
+        click.echo("promote: no-op")
+        click.echo("retention: unchanged")
+        return
+
+    if target_state == "Golden" and confirm != "GOLDEN":
+        raise click.ClickException("Promoting to Golden requires --confirm GOLDEN")
+
+    try:
+        metadata.update_review_state(
+            version_id=record.id,
+            expected_old_review_state=record.review_state,
+            new_review_state=target_state,
+            actor=getpass.getuser(),
+            created_at=_utc_now(),
+            reason=message,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"version: {record.id}")
+    click.echo(f"old_state: [{record.review_state}/{record.retention_state}]")
+    click.echo(f"new_state: [{target_state}/{record.retention_state}]")
+    click.echo("promote: moved")
+    click.echo("retention: unchanged")
+    if target_state == "Candidate":
+        click.echo("candidate_outbox: not-implemented")
+
+
+@lifecycle.command("events")
+@click.argument("version")
+@click.option("--limit", default=20, show_default=True, type=click.IntRange(min=1))
+def lifecycle_events_cmd(version: str, limit: int) -> None:
+    """Show lifecycle transition events for a version."""
+    _, metadata = _repo_from_cwd()
+    record = metadata.get_version(version)
+    if record is None:
+        raise click.ClickException(f"Version not found or ambiguous: {version}")
+
+    events = metadata.list_lifecycle_events(record.id, limit=limit)
+    if not events:
+        click.echo(f"No lifecycle events for {record.id}.")
+        return
+
+    for item in events:
+        reason = item.reason or "-"
+        click.echo(
+            f"{item.id} {item.version_id} "
+            f"{item.old_review_state}->{item.new_review_state} "
+            f"{item.old_retention_state}->{item.new_retention_state} "
+            f"{item.actor} {item.created_at} {reason}"
+        )
 
 
 @branch.command("create")

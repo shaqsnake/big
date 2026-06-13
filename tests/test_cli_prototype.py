@@ -372,6 +372,82 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert missing_lineage.exit_code != 0
         assert "Version not found or ambiguous" in missing_lineage.output
 
+        promote = runner.invoke(
+            main,
+            [
+                "promote",
+                second_version.group(1),
+                "--to",
+                "candidate",
+                "--message",
+                "ready for review",
+            ],
+        )
+        assert promote.exit_code == 0, promote.output
+        assert f"version: {second_version.group(1)}" in promote.output
+        assert "old_state: [Exploring/resident]" in promote.output
+        assert "new_state: [Candidate/resident]" in promote.output
+        assert "promote: moved" in promote.output
+        assert "retention: unchanged" in promote.output
+        assert "candidate_outbox: not-implemented" in promote.output
+
+        promoted_show = runner.invoke(main, ["show", second_version.group(1)])
+        assert promoted_show.exit_code == 0, promoted_show.output
+        assert "state: [Candidate/resident]" in promoted_show.output
+
+        lifecycle_events = runner.invoke(
+            main,
+            ["lifecycle", "events", second_version.group(1)],
+        )
+        assert lifecycle_events.exit_code == 0, lifecycle_events.output
+        assert (
+            f" {second_version.group(1)} Exploring->Candidate "
+            in lifecycle_events.output
+        )
+        assert "resident->resident" in lifecycle_events.output
+        assert "ready for review" in lifecycle_events.output
+
+        noop_promote = runner.invoke(
+            main,
+            ["promote", second_version.group(1), "--to", "Candidate"],
+        )
+        assert noop_promote.exit_code == 0, noop_promote.output
+        assert "promote: no-op" in noop_promote.output
+
+        demote = runner.invoke(
+            main,
+            ["promote", second_version.group(1), "--to", "Exploring"],
+        )
+        assert demote.exit_code != 0
+        assert "Review state demotion is not supported" in demote.output
+
+        golden_without_confirm = runner.invoke(
+            main,
+            ["promote", second_version.group(1), "--to", "Golden"],
+        )
+        assert golden_without_confirm.exit_code != 0
+        assert (
+            "Promoting to Golden requires --confirm GOLDEN"
+            in golden_without_confirm.output
+        )
+
+        golden = runner.invoke(
+            main,
+            [
+                "promote",
+                second_version.group(1),
+                "--to",
+                "Golden",
+                "--confirm",
+                "GOLDEN",
+                "--message",
+                "tapeout approved",
+            ],
+        )
+        assert golden.exit_code == 0, golden.output
+        assert "old_state: [Candidate/resident]" in golden.output
+        assert "new_state: [Golden/resident]" in golden.output
+
         reset = runner.invoke(
             main,
             [
