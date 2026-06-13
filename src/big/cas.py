@@ -5,6 +5,7 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
+import stat
 
 
 @dataclass(frozen=True)
@@ -48,11 +49,16 @@ def object_path(cas_root: Path, cas_hash: str) -> Path:
     return cas_root / cas_hash[:2] / cas_hash[2:4] / cas_hash
 
 
+def make_readonly(path: Path) -> None:
+    os.chmod(path, stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
+
+
 def publish_object(cas_root: Path, staged: Path, expected_hash: str) -> Path:
     final_path = object_path(cas_root, expected_hash)
     if final_path.exists():
         if sha256_file(final_path) != expected_hash:
             raise RuntimeError(f"Existing CAS object hash mismatch: {final_path}")
+        make_readonly(final_path)
         return final_path
 
     final_path.parent.mkdir(parents=True, exist_ok=True)
@@ -62,11 +68,12 @@ def publish_object(cas_root: Path, staged: Path, expected_hash: str) -> Path:
     except FileExistsError:
         if sha256_file(final_path) != expected_hash:
             raise RuntimeError(f"Existing CAS object hash mismatch: {final_path}")
+        make_readonly(final_path)
         return final_path
 
     actual_hash = sha256_file(final_path)
     if actual_hash != expected_hash:
         final_path.unlink(missing_ok=True)
         raise RuntimeError(f"Published object hash mismatch for {staged}")
-    os.chmod(final_path, 0o444)
+    make_readonly(final_path)
     return final_path

@@ -103,6 +103,15 @@ big commit --step place \
 - 输出 `inputs: 3` 和 `outputs: 2`
 - `manual-lab/data/WslChip/.big/cas/objects/` 下出现 CAS 对象
 
+检查 CAS 对象是否仍有写权限：
+
+```bash
+cd /mnt/d/Code/App/big
+find manual-lab/data/WslChip/.big/cas/objects -type f -perm /222 -print
+```
+
+期望：没有输出。CAS 对象应被发布为只读文件；如果已有合法 CAS 对象曾被误改成可写，再次提交相同内容时也会被重新收紧为只读。
+
 ### 用例 2：查看历史和详情
 
 ```bash
