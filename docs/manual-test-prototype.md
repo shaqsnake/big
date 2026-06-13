@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会使用 `manual-lab/data/WslChip`，并通过 `PYTHONPATH=src python -m big ...` 执行一轮 init、commit、log。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、alice 提交、创建 `feature/place`、验证 checkout plan/copied/reused、shaqsnake 提交、验证两个用户的默认历史隔离、确认 `main` 仍为空，并检查 repo stats。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
