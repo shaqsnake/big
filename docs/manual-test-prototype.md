@@ -305,9 +305,9 @@ big branch show workspace/default/alice/APR
 
 此时会额外显示 workspace-private ref。
 
-### 用例 7：解析 checkout 目标路径
+### 用例 7：checkout 目标路径和 copy-only 物化
 
-当前原型先支持 plan-only checkout，用于确认目标 branch、head version 和稳定目录路径；它不会复制文件，也不会创建目标目录。
+当前原型支持两步验证 checkout：先用 `--plan` 确认目标 branch、head version 和稳定目录路径；再执行不带 `--plan` 的 `big checkout <branch>`，把该 version 的 FileRef 从 CAS 复制到用户私有目标目录。这个切片只做 copy-only 物化，不切换父 shell 的当前目录，也不改写原始 workspace。
 
 ```bash
 big checkout feature/place --plan
@@ -320,7 +320,30 @@ big checkout feature/place --plan
 - 输出 `materialization: plan-only`
 - 输出 `target_path: .../user/alice/.big-checkouts/APR/feature__place/<version>`
 - 输出可复制执行的 `cd: cd -- <target-path>`
-- 目标目录尚不会被创建，后续 copy-only 物化会在单独切片实现。
+- 目标目录尚不会被创建。
+
+执行 copy-only 物化：
+
+```bash
+big checkout feature/place
+```
+
+期望：
+
+- 输出 `materialization: copied`
+- 输出 `files: ...` 和 `bytes: ...`
+- 创建目标目录 `.../user/alice/.big-checkouts/APR/feature__place/<version>`
+- 在目标目录下可以看到当时 version 对应的 `inputs/`、`scripts/`、`outputs/`、`reports/` 文件
+- 目标目录下存在 `.big-checkout.json` marker，用于记录 repo、branch、version、source workspace、文件数量和字节数
+- 原始 workspace 不会被修改；如果要进入 checkout 目录，需要手工执行输出中的 `cd -- <target-path>`
+
+再次执行同一命令：
+
+```bash
+big checkout feature/place
+```
+
+期望输出 `materialization: reused`，表示已有 marker 匹配同一个 repo、branch 和 version，原型直接复用已有物化目录。
 
 ## 当前原型范围
 
@@ -336,6 +359,7 @@ big checkout feature/place --plan
 - `big verify`
 - `big diff`
 - `big reset`
+- `big checkout <branch>`
 - `big checkout <branch> --plan`
 - `big branch create`
 - `big branch list`
@@ -344,7 +368,6 @@ big checkout feature/place --plan
 
 暂未实现：
 
-- `big checkout`
 - `big restore --in-place`
 - Linux groups 权限接入
-- 3DIC 多 work root 指针配置
+- 3DIC 多 work root checkout/restore 联动

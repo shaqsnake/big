@@ -220,6 +220,136 @@ def _checkout_target_path(
     )
 
 
+def _dedupe_checkout_refs(refs: list[FileRef]) -> list[FileRef]:
+    by_path: dict[str, FileRef] = {}
+    for ref in refs:
+        existing = by_path.get(ref.path)
+        if existing is None:
+            by_path[ref.path] = ref
+            continue
+        if existing.cas_hash != ref.cas_hash or existing.size != ref.size:
+            raise click.ClickException(
+                f"Version contains conflicting FileRefs for path: {ref.path}"
+            )
+    return [by_path[path] for path in sorted(by_path)]
+
+
+def _checkout_destination(root: Path, rel_path: str) -> Path:
+    path = Path(rel_path)
+    if path.is_absolute() or ".." in path.parts:
+        raise click.ClickException(f"Unsafe FileRef path in manifest: {rel_path}")
+    return root / path
+
+
+def _checkout_marker_matches(
+    target_path: Path,
+    repo_id: str,
+    branch_name: str,
+    version_id: str,
+) -> bool:
+    marker_path = target_path / ".big-checkout.json"
+    if not marker_path.exists():
+        return False
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        marker.get("schema") == 1
+        and marker.get("repo_id") == repo_id
+        and marker.get("branch") == branch_name
+        and marker.get("version") == version_id
+        and marker.get("materialization") == "copy"
+    )
+
+
+def _copy_checkout_refs(cas_root: Path, refs: list[FileRef], target_root: Path) -> None:
+    for ref in refs:
+        source = object_path(cas_root, ref.cas_hash)
+        if not source.exists():
+            raise click.ClickException(
+                f"Missing CAS object for {ref.role} {ref.path}: "
+                f"{_short_hash(ref.cas_hash)}"
+            )
+        actual_size = source.stat().st_size
+        if actual_size != ref.size:
+            raise click.ClickException(
+                f"CAS object size mismatch for {ref.role} {ref.path}: "
+                f"{ref.size}->{actual_size}"
+            )
+        actual_hash = sha256_file(source)
+        if actual_hash != ref.cas_hash:
+            raise click.ClickException(
+                f"CAS object hash mismatch for {ref.role} {ref.path}: "
+                f"{_short_hash(ref.cas_hash)}->{_short_hash(actual_hash)}"
+            )
+
+        destination = _checkout_destination(target_root, ref.path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        destination.chmod(0o644)
+
+
+def _materialize_checkout(
+    config: object,
+    workspace_context: WorkspaceContext,
+    branch_name: str,
+    version_id: str,
+    target_path: Path,
+    refs: list[FileRef],
+) -> str:
+    if target_path.exists():
+        if not target_path.is_dir():
+            raise click.ClickException(
+                f"Checkout target already exists and is not a directory: {target_path}"
+            )
+        if _checkout_marker_matches(
+            target_path,
+            repo_id=config.repo_id,
+            branch_name=branch_name,
+            version_id=version_id,
+        ):
+            return "reused"
+        raise click.ClickException(
+            f"Checkout target already exists and is not reusable: {target_path}"
+        )
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = target_path.parent / f".{target_path.name}.tmp-{uuid.uuid4().hex}"
+    total_bytes = sum(ref.size for ref in refs)
+    marker = {
+        "schema": 1,
+        "repo_id": config.repo_id,
+        "branch": branch_name,
+        "version": version_id,
+        "materialization": "copy",
+        "source_workspace": str(workspace_context.workspace_path),
+        "target_path": str(target_path),
+        "work_root_id": workspace_context.work_root.id,
+        "user": workspace_context.user,
+        "flow": workspace_context.flow,
+        "files": len(refs),
+        "bytes": total_bytes,
+        "created_at": _utc_now(),
+    }
+
+    try:
+        temp_path.mkdir()
+        _copy_checkout_refs(config.cas_dir, refs, temp_path)
+        (temp_path / ".big-checkout.json").write_text(
+            json.dumps(marker, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        shutil.move(str(temp_path), str(target_path))
+    except click.ClickException:
+        shutil.rmtree(temp_path, ignore_errors=True)
+        raise
+    except OSError as exc:
+        shutil.rmtree(temp_path, ignore_errors=True)
+        raise click.ClickException(f"Failed to materialize checkout: {exc}") from exc
+    return "copied"
+
+
 def _parse_work_root(value: str) -> WorkRoot:
     if "=" not in value:
         raise click.BadParameter("Expected id=path")
@@ -344,12 +474,7 @@ def repo_init(
     help="Resolve branch and target path only; do not materialize files.",
 )
 def checkout_cmd(branch_name: str, plan: bool) -> None:
-    """Resolve a branch checkout target without changing the source workspace."""
-    if not plan:
-        raise click.ClickException(
-            "Materializing checkout is not implemented yet; rerun with --plan"
-        )
-
+    """Checkout a branch into a user-private materialized directory."""
     config, metadata = _repo_from_cwd()
     try:
         workspace_context = resolve_workspace_context(config, Path.cwd())
@@ -375,11 +500,26 @@ def checkout_cmd(branch_name: str, plan: bool) -> None:
     if target_path == workspace_context.workspace_path:
         raise click.ClickException("Checkout target path matches source workspace")
 
+    refs = _dedupe_checkout_refs(metadata.get_file_refs(version.id))
+    total_bytes = sum(ref.size for ref in refs)
+    materialization = "plan-only"
+    if not plan:
+        materialization = _materialize_checkout(
+            config=config,
+            workspace_context=workspace_context,
+            branch_name=branch_record.name,
+            version_id=version.id,
+            target_path=target_path,
+            refs=refs,
+        )
+
     click.echo(f"branch: {branch_record.name}")
     click.echo(f"version: {version.id}")
     click.echo(f"source_workspace: {workspace_context.workspace_path}")
     click.echo(f"target_path: {target_path}")
-    click.echo("materialization: plan-only")
+    click.echo(f"files: {len(refs)}")
+    click.echo(f"bytes: {total_bytes}")
+    click.echo(f"materialization: {materialization}")
     click.echo(f"cd: cd -- {target_path}")
 
 

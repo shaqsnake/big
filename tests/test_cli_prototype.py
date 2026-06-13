@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 from pathlib import Path
@@ -138,9 +139,32 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert f"target_path: {expected_target}" in checkout_plan.output
         assert not expected_target.exists()
 
-        checkout_without_plan = runner.invoke(main, ["checkout", "feature/place"])
-        assert checkout_without_plan.exit_code != 0
-        assert "rerun with --plan" in checkout_without_plan.output
+        checkout = runner.invoke(main, ["checkout", "feature/place"])
+        assert checkout.exit_code == 0, checkout.output
+        assert "branch: feature/place" in checkout.output
+        assert f"version: {first_version.group(1)}" in checkout.output
+        assert "files: 4" in checkout.output
+        assert "materialization: copied" in checkout.output
+        assert expected_target.exists()
+        assert (expected_target / "inputs" / "top.v").read_text(
+            encoding="utf-8"
+        ) == "module top; endmodule\n"
+        assert not (expected_target / "inputs" / "top.v").is_symlink()
+        assert (expected_target / "scripts" / "place.tcl").exists()
+        assert (expected_target / "outputs" / "top.def").exists()
+        assert (expected_target / "reports" / "place.rpt").exists()
+        marker = json.loads(
+            (expected_target / ".big-checkout.json").read_text(encoding="utf-8")
+        )
+        assert marker["schema"] == 1
+        assert marker["repo_id"] == "DemoChip"
+        assert marker["branch"] == "feature/place"
+        assert marker["version"] == first_version.group(1)
+        assert marker["materialization"] == "copy"
+
+        checkout_again = runner.invoke(main, ["checkout", "feature/place"])
+        assert checkout_again.exit_code == 0, checkout_again.output
+        assert "materialization: reused" in checkout_again.output
 
         branch_list = runner.invoke(main, ["branch", "list"])
         assert branch_list.exit_code == 0, branch_list.output
