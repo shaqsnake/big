@@ -31,7 +31,7 @@ context:
 
 - Given alice 的 APR workspace
 - When smoke 执行 shell-init、commit、branch create、checkout plan 和 checkout
-- Then checkout 目录被创建，文件内容可读，再次 checkout 输出 `materialization: reused`。
+- Then checkout 目录被创建，文件内容可读；进入 checkout 目录后 `status/log` 默认指向 `feature/place`；再次 checkout 输出 `materialization: reused`。
 
 - Given shaqsnake 的 APR workspace
 - When smoke 执行独立 commit 和 log

@@ -336,6 +336,7 @@ big checkout feature/place
 - 在目标目录下可以看到当时 version 对应的 `inputs/`、`scripts/`、`outputs/`、`reports/` 文件
 - 目标目录下存在 `.big-checkout.json` marker，用于记录 repo、branch、version、source workspace、文件数量和字节数
 - 原始 workspace 不会被修改；未启用 shell 集成时，如果要进入 checkout 目录，需要手工执行输出中的 `cd -- <target-path>`
+- 进入目标目录后执行 `big status`，会显示 `default_ref: feature/place`，而不是误识别为 `.big-checkouts` workspace
 
 再次执行同一命令：
 

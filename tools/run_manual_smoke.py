@@ -144,6 +144,14 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     if not (target_path / ".big-checkout.json").exists():
         raise SystemExit(f"Checkout marker is missing: {target_path}")
 
+    checkout_status = _run_big(["status"], target_path, env)
+    _expect_contains(checkout_status, "default_ref: feature/place")
+    _expect_contains(checkout_status, "workspace: checkout/default/alice/APR/feature/place@")
+    _expect_contains(checkout_status, f"head: {alice_version}")
+
+    checkout_log = _run_big(["log"], target_path, env)
+    _expect_contains(checkout_log, alice_version)
+
     checkout_again = _run_big(["checkout", "feature/place"], alice_workspace, env)
     _expect_contains(checkout_again, "materialization: reused")
 

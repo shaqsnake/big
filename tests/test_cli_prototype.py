@@ -166,6 +166,20 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert checkout_again.exit_code == 0, checkout_again.output
         assert "materialization: reused" in checkout_again.output
 
+        os.chdir(expected_target)
+        checkout_status = runner.invoke(main, ["status"])
+        assert checkout_status.exit_code == 0, checkout_status.output
+        assert "workspace: checkout/default/alice/APR/feature/place@" in checkout_status.output
+        assert f"workspace_path: {expected_target}" in checkout_status.output
+        assert "default_ref: feature/place" in checkout_status.output
+        assert f"head: {first_version.group(1)}" in checkout_status.output
+
+        checkout_log = runner.invoke(main, ["log"])
+        assert checkout_log.exit_code == 0, checkout_log.output
+        assert first_version.group(1) in checkout_log.output
+
+        os.chdir(workspace)
+
         branch_list = runner.invoke(main, ["branch", "list"])
         assert branch_list.exit_code == 0, branch_list.output
         assert f"named feature/place {first_version.group(1)}" in branch_list.output
@@ -284,6 +298,33 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         named_branch_events = runner.invoke(main, ["branch", "events", "feature/place"])
         assert named_branch_events.exit_code == 0, named_branch_events.output
         assert "No branch events on feature/place." in named_branch_events.output
+
+        os.chdir(expected_target)
+        _write(expected_target / "reports" / "place.rpt", "wns 0.02\n")
+        checkout_commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**;scripts/**",
+                "--outputs",
+                "outputs/**;reports/**",
+                "--message",
+                "continue from checkout",
+            ],
+        )
+        assert checkout_commit.exit_code == 0, checkout_commit.output
+        checkout_version = re.search(r"version: (v[0-9a-f]+)", checkout_commit.output)
+        assert checkout_version
+        assert "branch: feature/place" in checkout_commit.output
+        assert "workspace: checkout/default/alice/APR/feature/place@" in checkout_commit.output
+
+        checkout_branch_log = runner.invoke(main, ["log"])
+        assert checkout_branch_log.exit_code == 0, checkout_branch_log.output
+        assert checkout_version.group(1) in checkout_branch_log.output
+        assert first_version.group(1) in checkout_branch_log.output
     finally:
         os.chdir(old_cwd)
 

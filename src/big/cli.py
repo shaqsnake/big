@@ -24,6 +24,7 @@ from .config import (
     CONFIG_NAME,
     ensure_repo_dirs,
     find_config,
+    RepoConfig,
     resolve_work_root,
     resolve_workspace_context,
     WorkspaceContext,
@@ -161,9 +162,76 @@ def _validate_branch_name(branch_name: str) -> None:
 
 def _current_workspace_branch(config: object) -> str:
     try:
-        return resolve_workspace_context(config, Path.cwd()).default_branch
+        return _resolve_cli_workspace_context(config, Path.cwd()).default_branch
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
+
+
+def _resolve_checkout_workspace_context(
+    config: RepoConfig,
+    path: Path,
+) -> WorkspaceContext | None:
+    resolved = path.resolve()
+    start = resolved if resolved.is_dir() else resolved.parent
+    try:
+        work_root = resolve_work_root(config, start)
+    except ValueError:
+        return None
+
+    for candidate in (start, *start.parents):
+        if candidate != work_root.path and work_root.path not in candidate.parents:
+            break
+        marker_path = candidate / ".big-checkout.json"
+        if not marker_path.exists():
+            continue
+
+        try:
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise click.ClickException(f"Invalid checkout marker: {marker_path}") from exc
+
+        if (
+            marker.get("schema") != 1
+            or marker.get("repo_id") != config.repo_id
+            or marker.get("materialization") != "copy"
+        ):
+            raise click.ClickException(f"Checkout marker does not match repo: {marker_path}")
+
+        target_path = Path(marker.get("target_path", "")).resolve()
+        if target_path != candidate.resolve():
+            raise click.ClickException(f"Checkout marker target mismatch: {marker_path}")
+
+        work_root_id = str(marker.get("work_root_id", work_root.id))
+        marker_work_root = next(
+            (item for item in config.work_roots if item.id == work_root_id),
+            work_root,
+        )
+        user = str(marker.get("user", ""))
+        flow = str(marker.get("flow", ""))
+        branch = str(marker.get("branch", ""))
+        version = str(marker.get("version", ""))
+        if not user or not flow or not branch or not version:
+            raise click.ClickException(f"Checkout marker is incomplete: {marker_path}")
+
+        return WorkspaceContext(
+            work_root=marker_work_root,
+            user=user,
+            flow=flow,
+            workspace_path=candidate.resolve(),
+            workspace_id=(
+                f"checkout/{marker_work_root.id}/{user}/{flow}/"
+                f"{branch}@{version}"
+            ),
+            default_branch=branch,
+        )
+    return None
+
+
+def _resolve_cli_workspace_context(config: RepoConfig, path: Path) -> WorkspaceContext:
+    checkout_context = _resolve_checkout_workspace_context(config, path)
+    if checkout_context is not None:
+        return checkout_context
+    return resolve_workspace_context(config, path)
 
 
 def _resolve_source_ref(
@@ -500,7 +568,7 @@ def checkout_cmd(branch_name: str, plan: bool) -> None:
     """Checkout a branch into a user-private materialized directory."""
     config, metadata = _repo_from_cwd()
     try:
-        workspace_context = resolve_workspace_context(config, Path.cwd())
+        workspace_context = _resolve_cli_workspace_context(config, Path.cwd())
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -615,7 +683,7 @@ def status_cmd() -> None:
     click.echo(f"work_root: {work_root.id} {work_root.path}")
 
     try:
-        workspace_context = resolve_workspace_context(config, cwd)
+        workspace_context = _resolve_cli_workspace_context(config, cwd)
     except ValueError as exc:
         click.echo("workspace: -")
         click.echo("default_ref: -")
@@ -842,7 +910,7 @@ def commit_cmd(
     workspace = Path.cwd().resolve()
     config, metadata = _repo_from_cwd()
     try:
-        workspace_context = resolve_workspace_context(config, workspace)
+        workspace_context = _resolve_cli_workspace_context(config, workspace)
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     branch = branch or workspace_context.default_branch
@@ -928,7 +996,7 @@ def log_cmd(branch: str | None, limit: int, verbose: bool) -> None:
     config, metadata = _repo_from_cwd()
     if branch is None:
         try:
-            workspace_context = resolve_workspace_context(config, Path.cwd())
+            workspace_context = _resolve_cli_workspace_context(config, Path.cwd())
         except ValueError as exc:
             raise click.ClickException(
                 f"{exc}; pass an explicit branch/ref to log"
