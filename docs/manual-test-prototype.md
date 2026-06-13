@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、确认 `main` 仍为空，并检查 repo stats。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、查看 parent-chain lineage、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、确认 `main` 仍为空，并检查 repo stats。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
@@ -152,6 +152,7 @@ big repo stats
 ```bash
 big status
 big log
+big lineage <version>
 big show <version> --full
 big verify <version>
 big repo verify
@@ -161,6 +162,7 @@ big repo verify
 
 - `big status` 显示当前 workspace 的 `head` 等于刚才提交的 version ID
 - `big log` 显示刚才的 version ID
+- `big lineage <version>` 显示从目标 version 向前追溯的 parent chain；当前原型只展示 commit parent，不展示后续 Growth 可能引入的 `derived_from`、`consumes` 等跨制品依赖边。
 - `big show --full` 展示 inputs、outputs、SHA-256 摘要和状态 `[Exploring/resident]`
 - `big verify <version>` 输出 `integrity: ok`，表示该 version manifest 引用的 CAS 对象存在、大小一致且 SHA-256 校验通过。
 - `big repo verify` 输出 `integrity: ok`，表示仓库内所有 manifest 引用的 CAS 对象都通过完整性检查；如果失败，可加 `--full` 查看具体 version 和 FileRef。
@@ -403,6 +405,7 @@ pwd
 - `big repo init --work-root id=path` 创建 3DIC 指针型 work root 配置
 - `big commit`
 - `big log`
+- `big lineage`
 - `big show`
 - `big verify`
 - `big diff`

@@ -347,6 +347,31 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "~ input inputs/top.v" in diff.output
         assert "~ output outputs/top.def" in diff.output
 
+        lineage = runner.invoke(main, ["lineage", second_version.group(1)])
+        assert lineage.exit_code == 0, lineage.output
+        assert f"version: {second_version.group(1)}" in lineage.output
+        assert "entries: 2" in lineage.output
+        assert "truncated: no" in lineage.output
+        assert (
+            f"0 {second_version.group(1)} parent={first_version.group(1)}"
+            in lineage.output
+        )
+        assert f"1 {first_version.group(1)} parent=-" in lineage.output
+        assert "message: modified place snapshot" in lineage.output
+
+        limited_lineage = runner.invoke(
+            main,
+            ["lineage", second_version.group(1), "--limit", "1"],
+        )
+        assert limited_lineage.exit_code == 0, limited_lineage.output
+        assert "entries: 1" in limited_lineage.output
+        assert "truncated: yes" in limited_lineage.output
+        assert f"1 {first_version.group(1)} parent=-" not in limited_lineage.output
+
+        missing_lineage = runner.invoke(main, ["lineage", "v-does-not-exist"])
+        assert missing_lineage.exit_code != 0
+        assert "Version not found or ambiguous" in missing_lineage.output
+
         reset = runner.invoke(
             main,
             [

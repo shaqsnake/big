@@ -125,6 +125,11 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     alice_version = _version_from(alice_commit)
     _expect_contains(alice_commit, "branch: workspace/default/alice/APR")
 
+    alice_lineage = _run_big(["lineage", alice_version], alice_workspace, env)
+    _expect_contains(alice_lineage, "entries: 1")
+    _expect_contains(alice_lineage, "truncated: no")
+    _expect_contains(alice_lineage, f"0 {alice_version} parent=-")
+
     _run_big(["branch", "create", "feature/place"], alice_workspace, env)
 
     checkout_plan = _run_big(["checkout", "feature/place", "--plan"], alice_workspace, env)

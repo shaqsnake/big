@@ -1200,6 +1200,58 @@ def show_cmd(version: str, verbose: bool, show_full: bool) -> None:
                 click.echo(f"  ... {len(items) - len(visible)} more; use --full")
 
 
+@main.command("lineage")
+@click.argument("version")
+@click.option("--limit", default=20, show_default=True, type=click.IntRange(min=1))
+def lineage_cmd(version: str, limit: int) -> None:
+    """Show a version's parent chain."""
+    _, metadata = _repo_from_cwd()
+    record = metadata.get_version(version)
+    if record is None:
+        raise click.ClickException(f"Version not found or ambiguous: {version}")
+
+    chain: list[VersionRecord] = []
+    current_id: str | None = record.id
+    visited: set[str] = set()
+    truncated = False
+    missing_parent: str | None = None
+    cycle_at: str | None = None
+
+    while current_id is not None:
+        if current_id in visited:
+            cycle_at = current_id
+            break
+        if len(chain) >= limit:
+            truncated = True
+            break
+        current = metadata.get_version(current_id)
+        if current is None:
+            missing_parent = current_id
+            break
+        chain.append(current)
+        visited.add(current_id)
+        current_id = current.parent_id
+
+    click.echo(f"version: {record.id}")
+    click.echo(f"entries: {len(chain)}")
+    click.echo(f"truncated: {'yes' if truncated else 'no'}")
+    if missing_parent is not None:
+        click.echo(f"missing_parent: {missing_parent}")
+    if cycle_at is not None:
+        click.echo(f"cycle_at: {cycle_at}")
+    click.echo("parent_chain:")
+    for depth, item in enumerate(chain):
+        click.echo(
+            f"  {depth} {item.id} parent={item.parent_id or '-'} "
+            f"branch={item.branch} step={item.step} "
+            f"state=[{item.review_state}/{item.retention_state}]"
+        )
+        if item.workspace_id:
+            click.echo(f"    workspace: {item.workspace_id}")
+        if item.message:
+            click.echo(f"    message: {item.message}")
+
+
 @main.command("verify")
 @click.argument("version")
 @click.option("--full", "show_full", is_flag=True, help="Show every failed FileRef.")
