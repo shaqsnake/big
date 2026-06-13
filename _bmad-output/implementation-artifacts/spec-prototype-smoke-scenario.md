@@ -12,7 +12,7 @@ context:
 
 ## Intent
 
-**问题：** `make smoke` 原先只覆盖 init、commit、log，已经落后于当前原型的关键路径；用户在 WSL 中手工验证时，还需要确认 workspace-private ref 隔离、命名 branch、checkout copy-only 物化和 repo stats。
+**问题：** `make smoke` 原先只覆盖 init、commit、log，已经落后于当前原型的关键路径；用户在 WSL 中手工验证时，还需要确认 shell 集成输出、workspace-private ref 隔离、命名 branch、checkout copy-only 物化和 repo stats。
 
 **方案：** 新增 `tools/run_manual_smoke.py`，由 Makefile 调用。脚本在可重置的 `manual-lab/` 目录下生成 fixture，执行真实 `python -m big` 命令，并对关键输出和落盘文件做断言。
 
@@ -30,7 +30,7 @@ context:
 - Then 脚本重建 `manual-lab/data/WslChip` 并完成 repo init。
 
 - Given alice 的 APR workspace
-- When smoke 执行 commit、branch create、checkout plan 和 checkout
+- When smoke 执行 shell-init、commit、branch create、checkout plan 和 checkout
 - Then checkout 目录被创建，文件内容可读，再次 checkout 输出 `materialization: reused`。
 
 - Given shaqsnake 的 APR workspace

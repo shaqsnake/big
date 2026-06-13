@@ -318,6 +318,19 @@ def test_commit_rejects_missing_inputs(tmp_path: Path) -> None:
         os.chdir(old_cwd)
 
 
+def test_shell_init_outputs_checkout_wrapper() -> None:
+    runner = CliRunner()
+    for shell in ("bash", "zsh"):
+        result = runner.invoke(main, ["shell-init", shell])
+        assert result.exit_code == 0, result.output
+        assert f'eval "$(big shell-init {shell})"' in result.output
+        assert "big() {" in result.output
+        assert 'command big "$@"' in result.output
+        assert "grep -q '^materialization: plan-only$'" in result.output
+        assert "sed -n 's/^cd: cd -- //p'" in result.output
+        assert 'cd -- "$__big_target"' in result.output
+
+
 def test_default_workspace_histories_are_isolated_by_user_and_flow(
     tmp_path: Path,
 ) -> None:

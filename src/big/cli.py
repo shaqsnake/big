@@ -378,6 +378,29 @@ def _build_work_roots(root: Path, values: tuple[str, ...]) -> tuple[WorkRoot, ..
     return work_roots
 
 
+def _shell_init_script(shell: str) -> str:
+    return f"""# BIG shell integration for {shell}.
+# Load it with:
+#   eval "$(big shell-init {shell})"
+big() {{
+  if [ "$#" -gt 0 ] && [ "$1" = "checkout" ]; then
+    local __big_output __big_status __big_target
+    __big_output="$(command big "$@" 2>&1)"
+    __big_status=$?
+    printf '%s\\n' "$__big_output"
+    if [ "$__big_status" -eq 0 ] && ! printf '%s\\n' "$__big_output" | grep -q '^materialization: plan-only$'; then
+      __big_target="$(printf '%s\\n' "$__big_output" | sed -n 's/^cd: cd -- //p' | tail -n 1)"
+      if [ -n "$__big_target" ]; then
+        cd -- "$__big_target" || return $?
+      fi
+    fi
+    return "$__big_status"
+  fi
+  command big "$@"
+}}
+"""
+
+
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def main() -> None:
     """BIG prototype CLI for EDA artifact snapshots."""
@@ -521,6 +544,13 @@ def checkout_cmd(branch_name: str, plan: bool) -> None:
     click.echo(f"bytes: {total_bytes}")
     click.echo(f"materialization: {materialization}")
     click.echo(f"cd: cd -- {target_path}")
+
+
+@main.command("shell-init")
+@click.argument("shell", type=click.Choice(["bash", "zsh"]))
+def shell_init_cmd(shell: str) -> None:
+    """Print shell integration for checkout directory switching."""
+    click.echo(_shell_init_script(shell), nl=False)
 
 
 @repo.command("stats")

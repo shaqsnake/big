@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、alice 提交、创建 `feature/place`、验证 checkout plan/copied/reused、shaqsnake 提交、验证两个用户的默认历史隔离、确认 `main` 仍为空，并检查 repo stats。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、创建 `feature/place`、验证 checkout plan/copied/reused、shaqsnake 提交、验证两个用户的默认历史隔离、确认 `main` 仍为空，并检查 repo stats。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
@@ -305,9 +305,9 @@ big branch show workspace/default/alice/APR
 
 此时会额外显示 workspace-private ref。
 
-### 用例 7：checkout 目标路径和 copy-only 物化
+### 用例 7：checkout 目标路径、copy-only 物化和 shell 集成
 
-当前原型支持两步验证 checkout：先用 `--plan` 确认目标 branch、head version 和稳定目录路径；再执行不带 `--plan` 的 `big checkout <branch>`，把该 version 的 FileRef 从 CAS 复制到用户私有目标目录。这个切片只做 copy-only 物化，不切换父 shell 的当前目录，也不改写原始 workspace。
+当前原型支持两步验证 checkout：先用 `--plan` 确认目标 branch、head version 和稳定目录路径；再执行不带 `--plan` 的 `big checkout <branch>`，把该 version 的 FileRef 从 CAS 复制到用户私有目标目录。CLI 子进程本身不能切换父 shell 的当前目录；未启用 shell 集成时，需要手工执行输出中的 `cd -- <target-path>`。启用 shell 集成后，wrapper 会在 checkout 成功物化或复用目录后自动进入目标目录。
 
 ```bash
 big checkout feature/place --plan
@@ -335,7 +335,7 @@ big checkout feature/place
 - 创建目标目录 `.../user/alice/.big-checkouts/APR/feature__place/<version>`
 - 在目标目录下可以看到当时 version 对应的 `inputs/`、`scripts/`、`outputs/`、`reports/` 文件
 - 目标目录下存在 `.big-checkout.json` marker，用于记录 repo、branch、version、source workspace、文件数量和字节数
-- 原始 workspace 不会被修改；如果要进入 checkout 目录，需要手工执行输出中的 `cd -- <target-path>`
+- 原始 workspace 不会被修改；未启用 shell 集成时，如果要进入 checkout 目录，需要手工执行输出中的 `cd -- <target-path>`
 
 再次执行同一命令：
 
@@ -344,6 +344,21 @@ big checkout feature/place
 ```
 
 期望输出 `materialization: reused`，表示已有 marker 匹配同一个 repo、branch 和 version，原型直接复用已有物化目录。
+
+可选：在 Bash 或 Zsh 中启用 checkout 自动切目录：
+
+```bash
+eval "$(big shell-init bash)"
+big checkout feature/place
+pwd
+```
+
+期望：
+
+- `big checkout feature/place` 仍打印原始 checkout 输出
+- 如果输出不是 `materialization: plan-only`，wrapper 会读取 `cd: cd -- <target-path>` 并进入该目录
+- `big checkout feature/place --plan` 只打印计划，不切目录
+- 其他 `big` 命令仍透传给真实 CLI
 
 ## 当前原型范围
 
@@ -361,6 +376,7 @@ big checkout feature/place
 - `big reset`
 - `big checkout <branch>`
 - `big checkout <branch> --plan`
+- `big shell-init bash|zsh`
 - `big branch create`
 - `big branch list`
 - `big branch show`

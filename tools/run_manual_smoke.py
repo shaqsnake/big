@@ -102,6 +102,11 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     alice_status = _run_big(["status"], alice_workspace, env)
     _expect_contains(alice_status, "default_ref: workspace/default/alice/APR")
 
+    shell_init = _run_big(["shell-init", "bash"], alice_workspace, env)
+    _expect_contains(shell_init, 'eval "$(big shell-init bash)"')
+    _expect_contains(shell_init, "big() {")
+    _expect_contains(shell_init, "grep -q '^materialization: plan-only$'")
+
     alice_commit = _run_big(
         [
             "commit",
