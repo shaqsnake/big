@@ -145,6 +145,7 @@ big repo stats
 
 - 输出 `versions`、`file_refs`、`logical_bytes`、`unique_referenced_bytes`、`cas_objects` 和 `cas_bytes`
 - 输出 `dedupe_ratio: ...x`
+- 输出按 `review_state` 聚合的版本数和逻辑字节数，例如 `Exploring`、`Candidate`
 - 输出按 `retention_state` 聚合的版本数和逻辑字节数，例如 `resident`
 
 ### 用例 2：查看历史和详情

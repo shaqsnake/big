@@ -719,6 +719,13 @@ def repo_stats_cmd() -> None:
     click.echo(f"cas_objects: {cas_objects}")
     click.echo(f"cas_bytes: {cas_bytes}")
     click.echo(f"dedupe_ratio: {dedupe_ratio:.2f}x")
+    if summary.by_review:
+        click.echo("review:")
+        for item in summary.by_review:
+            click.echo(
+                f"  {item.review_state}: "
+                f"versions={item.versions} logical_bytes={item.logical_bytes}"
+            )
     if summary.by_retention:
         click.echo("retention:")
         for item in summary.by_retention:

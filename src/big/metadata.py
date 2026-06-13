@@ -101,12 +101,20 @@ class RetentionStorageSummary:
 
 
 @dataclass(frozen=True)
+class ReviewStorageSummary:
+    review_state: str
+    versions: int
+    logical_bytes: int
+
+
+@dataclass(frozen=True)
 class StorageSummary:
     versions: int
     file_refs: int
     logical_bytes: int
     unique_referenced_objects: int
     unique_referenced_bytes: int
+    by_review: tuple[ReviewStorageSummary, ...]
     by_retention: tuple[RetentionStorageSummary, ...]
 
 
@@ -558,6 +566,18 @@ class SQLiteMetadataRepository(MetadataRepository):
                 ORDER BY versions.retention_state
                 """
             ).fetchall()
+            review_rows = conn.execute(
+                """
+                SELECT
+                    versions.review_state AS review_state,
+                    COUNT(DISTINCT versions.id) AS versions,
+                    COALESCE(SUM(file_refs.size), 0) AS logical_bytes
+                FROM versions
+                LEFT JOIN file_refs ON file_refs.version_id = versions.id
+                GROUP BY versions.review_state
+                ORDER BY versions.review_state
+                """
+            ).fetchall()
 
         return StorageSummary(
             versions=version_row["count"],
@@ -565,6 +585,14 @@ class SQLiteMetadataRepository(MetadataRepository):
             logical_bytes=ref_row["bytes"],
             unique_referenced_objects=unique_row["count"],
             unique_referenced_bytes=unique_row["bytes"],
+            by_review=tuple(
+                ReviewStorageSummary(
+                    review_state=row["review_state"],
+                    versions=row["versions"],
+                    logical_bytes=row["logical_bytes"],
+                )
+                for row in review_rows
+            ),
             by_retention=tuple(
                 RetentionStorageSummary(
                     retention_state=row["retention_state"],

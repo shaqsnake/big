@@ -264,6 +264,11 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     _expect_contains(stats, "file_refs: 10")
     _expect_contains(stats, "unique_referenced_objects: 4")
     _expect_contains(stats, "cas_objects: 4")
+    _expect_contains(stats, "review:")
+    _expect_contains(stats, "Candidate: versions=1")
+    _expect_contains(stats, "Exploring: versions=1")
+    _expect_contains(stats, "retention:")
+    _expect_contains(stats, "resident: versions=2")
 
     audit_verify = _run_big(["audit", "verify"], alice_workspace, env)
     _expect_contains(audit_verify, "events: 5")

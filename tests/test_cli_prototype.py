@@ -325,6 +325,8 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "unique_referenced_objects: 4" in stats.output
         assert "cas_objects: 4" in stats.output
         assert "dedupe_ratio: 1.00x" in stats.output
+        assert "review:" in stats.output
+        assert "Exploring: versions=1" in stats.output
         assert "resident: versions=1" in stats.output
 
         _write(workspace / "inputs" / "top.v", "module top; wire a; endmodule\n")
@@ -460,6 +462,12 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert golden.exit_code == 0, golden.output
         assert "old_state: [Candidate/resident]" in golden.output
         assert "new_state: [Golden/resident]" in golden.output
+
+        lifecycle_stats = runner.invoke(main, ["repo", "stats"])
+        assert lifecycle_stats.exit_code == 0, lifecycle_stats.output
+        assert "Exploring: versions=1" in lifecycle_stats.output
+        assert "Golden: versions=1" in lifecycle_stats.output
+        assert "resident: versions=2" in lifecycle_stats.output
 
         reset = runner.invoke(
             main,

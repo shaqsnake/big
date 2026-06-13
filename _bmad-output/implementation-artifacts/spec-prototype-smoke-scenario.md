@@ -40,6 +40,7 @@ context:
 - Given smoke 完成
 - When 查看 repo stats
 - Then `big repo verify` 输出 `integrity: ok`，repo stats 输出 2 个 version、10 个 file_ref、4 个唯一引用对象和 4 个 CAS 对象。
+- And repo stats 的 review 分布包含 `Candidate: versions=1` 和 `Exploring: versions=1`，retention 分布包含 `resident: versions=2`。
 
 - Given smoke 完成
 - When 执行 `big audit verify`
