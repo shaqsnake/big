@@ -26,7 +26,9 @@ from .config import (
     find_config,
     resolve_work_root,
     resolve_workspace_context,
+    WorkRoot,
     write_main_config,
+    write_pointer_config,
 )
 from .metadata import FileRef, SQLiteMetadataRepository, VersionRecord
 
@@ -37,7 +39,7 @@ BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 def _repo_from_cwd() -> tuple[object, SQLiteMetadataRepository]:
     try:
         config, _ = find_config(Path.cwd())
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
     ensure_repo_dirs(config)
     repo = SQLiteMetadataRepository(config.metadata_db)
@@ -197,6 +199,34 @@ def _is_ancestor_version(
     return False
 
 
+def _parse_work_root(value: str) -> WorkRoot:
+    if "=" not in value:
+        raise click.BadParameter("Expected id=path")
+    root_id, raw_path = value.split("=", 1)
+    root_id = root_id.strip()
+    raw_path = raw_path.strip()
+    if not root_id or not raw_path:
+        raise click.BadParameter("Expected non-empty id=path")
+    if "/" in root_id or "\\" in root_id:
+        raise click.BadParameter("Work root id must not contain path separators")
+    return WorkRoot(id=root_id, role=root_id, path=Path(raw_path).resolve())
+
+
+def _build_work_roots(root: Path, values: tuple[str, ...]) -> tuple[WorkRoot, ...]:
+    if not values:
+        return (WorkRoot(id="default", role="default", path=root),)
+    work_roots = tuple(_parse_work_root(value) for value in values)
+    ids = [item.id for item in work_roots]
+    if len(ids) != len(set(ids)):
+        raise click.ClickException("Duplicate work root id")
+    paths = [item.path for item in work_roots]
+    if len(paths) != len(set(paths)):
+        raise click.ClickException("Duplicate work root path")
+    if root not in paths:
+        raise click.ClickException("Main repo path must be one registered work root")
+    return work_roots
+
+
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def main() -> None:
     """BIG prototype CLI for EDA artifact snapshots."""
@@ -222,16 +252,59 @@ def branch() -> None:
     type=click.Choice(["2d", "3d"]),
     help="Project integration type. 3d is reserved for 3DIC layout roots.",
 )
-def repo_init(path: Path, repo_id: str, integration: str) -> None:
+@click.option(
+    "--work-root",
+    "work_root_values",
+    multiple=True,
+    help="Registered work root in id=path form. Repeat for 3DIC roots.",
+)
+def repo_init(
+    path: Path,
+    repo_id: str,
+    integration: str,
+    work_root_values: tuple[str, ...],
+) -> None:
     """Initialize a prototype BIG repository."""
     root = path.resolve()
     root.mkdir(parents=True, exist_ok=True)
+
     config_path = root / CONFIG_NAME
     if config_path.exists():
         click.echo(f"BIG repo already initialized: {config_path}")
+        config, _ = find_config(root)
+        repo_id = config.repo_id
+        integration = config.integration
+        work_roots = config.work_roots
     else:
-        write_main_config(root, repo_id=repo_id, integration=integration)
+        work_roots = _build_work_roots(root, work_root_values)
+        for item in work_roots:
+            item.path.mkdir(parents=True, exist_ok=True)
+        write_main_config(
+            root,
+            repo_id=repo_id,
+            integration=integration,
+            work_roots=work_roots,
+        )
         click.echo(f"created {config_path}")
+
+    for item in work_roots:
+        item.path.mkdir(parents=True, exist_ok=True)
+
+    for item in work_roots:
+        if item.path == root:
+            continue
+        pointer_path = item.path / CONFIG_NAME
+        if pointer_path.exists():
+            click.echo(f"BIG work root pointer already initialized: {pointer_path}")
+        else:
+            write_pointer_config(
+                item.path,
+                repo_id=repo_id,
+                integration=integration,
+                home=root,
+                work_root_id=item.id,
+            )
+            click.echo(f"created {pointer_path}")
 
     config, _ = find_config(root)
     ensure_repo_dirs(config)
@@ -239,6 +312,7 @@ def repo_init(path: Path, repo_id: str, integration: str) -> None:
     click.echo(f"repo: {config.repo_id}")
     click.echo(f"home: {config.home}")
     click.echo(f"metadata: {config.metadata_db}")
+    click.echo(f"work_roots: {len(config.work_roots)}")
 
 
 @repo.command("stats")

@@ -53,18 +53,46 @@ def _posix(path: Path) -> str:
     return path.resolve().as_posix()
 
 
-def write_main_config(root: Path, repo_id: str, integration: str = "2d") -> Path:
+def write_main_config(
+    root: Path,
+    repo_id: str,
+    integration: str = "2d",
+    work_roots: tuple[WorkRoot, ...] | None = None,
+) -> Path:
     config_path = root / CONFIG_NAME
+    work_roots = work_roots or (WorkRoot(id="default", path=root),)
     text = (
         "[repo]\n"
         f"id = \"{repo_id}\"\n"
         f"integration = \"{integration}\"\n"
         f"home = \"{_posix(root)}\"\n"
-        "\n"
-        "[[work_roots]]\n"
-        "id = \"default\"\n"
-        "role = \"default\"\n"
-        f"path = \"{_posix(root)}\"\n"
+    )
+    for item in work_roots:
+        text += (
+            "\n"
+            "[[work_roots]]\n"
+            f"id = \"{item.id}\"\n"
+            f"role = \"{item.role}\"\n"
+            f"path = \"{_posix(item.path)}\"\n"
+        )
+    config_path.write_text(text, encoding="utf-8")
+    return config_path
+
+
+def write_pointer_config(
+    root: Path,
+    repo_id: str,
+    integration: str,
+    home: Path,
+    work_root_id: str,
+) -> Path:
+    config_path = root / CONFIG_NAME
+    text = (
+        "[repo]\n"
+        f"id = \"{repo_id}\"\n"
+        f"integration = \"{integration}\"\n"
+        f"home = \"{_posix(home)}\"\n"
+        f"work_root_id = \"{work_root_id}\"\n"
     )
     config_path.write_text(text, encoding="utf-8")
     return config_path
@@ -74,6 +102,20 @@ def load_config(config_path: Path) -> RepoConfig:
     data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     repo = data["repo"]
     home = Path(repo["home"]).resolve()
+    if "work_root_id" in repo and not data.get("work_roots"):
+        main_config_path = home / CONFIG_NAME
+        if main_config_path.resolve() == config_path.resolve():
+            raise ValueError(f"Pointer config cannot point to itself: {config_path}")
+        config = load_config(main_config_path)
+        if config.repo_id != str(repo["id"]):
+            raise ValueError(f"Pointer repo id mismatch: {config_path}")
+        if config.integration != str(repo.get("integration", config.integration)):
+            raise ValueError(f"Pointer integration mismatch: {config_path}")
+        work_root_id = str(repo["work_root_id"])
+        if work_root_id not in {item.id for item in config.work_roots}:
+            raise ValueError(f"Pointer work root not registered: {work_root_id}")
+        return config
+
     work_roots = tuple(
         WorkRoot(
             id=str(item["id"]),

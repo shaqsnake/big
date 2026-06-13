@@ -67,6 +67,29 @@ manual-lab/data/WslChip/user/shaqsnake/APR
 big repo init manual-lab/data/WslChip --repo-id WslChip
 ```
 
+可选：初始化 3DIC 四个并行 work root：
+
+```bash
+mkdir -p manual-lab/data/StackChip_3D/user/alice/APR
+mkdir -p manual-lab/data/StackChip_Top/user/alice/APR
+mkdir -p manual-lab/data/StackChip_Bottom/user/alice/APR
+mkdir -p manual-lab/data/StackChip_MIX/user/alice/APR
+
+big repo init manual-lab/data/StackChip_3D \
+  --repo-id StackChip \
+  --integration 3d \
+  --work-root 3d=manual-lab/data/StackChip_3D \
+  --work-root top=manual-lab/data/StackChip_Top \
+  --work-root bottom=manual-lab/data/StackChip_Bottom \
+  --work-root mix=manual-lab/data/StackChip_MIX
+```
+
+期望：
+
+- `manual-lab/data/StackChip_3D/big.toml` 是主配置，并且只有 `_3D` 下创建 `.big/`
+- `_Top`、`_Bottom`、`_MIX` 下各自创建指针型 `big.toml`
+- 在 `_Top/user/alice/APR` 下执行 `big status` 时，输出 `home: .../StackChip_3D`、`work_root: top .../StackChip_Top` 和 `default_ref: workspace/top/alice/APR`
+
 进入工程师工作目录：
 
 ```bash
@@ -289,6 +312,7 @@ big branch show workspace/default/alice/APR
 - `big repo init`
 - `big repo stats`
 - `big status`
+- `big repo init --work-root id=path` 创建 3DIC 指针型 work root 配置
 - `big commit`
 - `big log`
 - `big show`

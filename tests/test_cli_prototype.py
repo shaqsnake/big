@@ -361,6 +361,82 @@ def test_default_workspace_histories_are_isolated_by_user_and_flow(
         os.chdir(old_cwd)
 
 
+def test_repo_init_supports_3dic_pointer_work_roots(tmp_path: Path) -> None:
+    runner = CliRunner()
+    data_root = tmp_path / "data"
+    main_root = data_root / "DemoChip_3D"
+    top_root = data_root / "DemoChip_Top"
+    bottom_root = data_root / "DemoChip_Bottom"
+    mix_root = data_root / "DemoChip_MIX"
+
+    init = runner.invoke(
+        main,
+        [
+            "repo",
+            "init",
+            str(main_root),
+            "--repo-id",
+            "DemoChip",
+            "--integration",
+            "3d",
+            "--work-root",
+            f"3d={main_root}",
+            "--work-root",
+            f"top={top_root}",
+            "--work-root",
+            f"bottom={bottom_root}",
+            "--work-root",
+            f"mix={mix_root}",
+        ],
+    )
+    assert init.exit_code == 0, init.output
+    assert "work_roots: 4" in init.output
+    assert (main_root / "big.toml").exists()
+    assert (main_root / ".big" / "metadata").exists()
+    assert (top_root / "big.toml").exists()
+    assert (bottom_root / "big.toml").exists()
+    assert (mix_root / "big.toml").exists()
+    assert not (top_root / ".big").exists()
+    assert "work_root_id = \"top\"" in (top_root / "big.toml").read_text(
+        encoding="utf-8"
+    )
+
+    top_workspace = top_root / "user" / "alice" / "APR"
+    _write(top_workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(top_workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(top_workspace)
+        status = runner.invoke(main, ["status"])
+        assert status.exit_code == 0, status.output
+        assert "repo: DemoChip" in status.output
+        assert "integration: 3d" in status.output
+        assert f"home: {main_root.resolve()}" in status.output
+        assert f"work_root: top {top_root.resolve()}" in status.output
+        assert "workspace: user/alice/APR" in status.output
+        assert "default_ref: workspace/top/alice/APR" in status.output
+
+        commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+            ],
+        )
+        assert commit.exit_code == 0, commit.output
+        assert "branch: workspace/top/alice/APR" in commit.output
+        assert (main_root / ".big" / "cas" / "objects").exists()
+        assert not (top_root / ".big").exists()
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_branch_show_rejects_unknown_ref(tmp_path: Path) -> None:
     runner = CliRunner()
     repo_root = tmp_path / "data" / "DemoChip"
