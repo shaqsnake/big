@@ -226,6 +226,16 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert events[0].old_head_version_id == second_version.group(1)
         assert events[0].new_head_version_id == first_version.group(1)
         assert events[0].reason == "rollback to initial place"
+
+        branch_events = runner.invoke(main, ["branch", "events"])
+        assert branch_events.exit_code == 0, branch_events.output
+        assert "reset workspace/default/alice/APR" in branch_events.output
+        assert f"{second_version.group(1)}->{first_version.group(1)}" in branch_events.output
+        assert "rollback to initial place" in branch_events.output
+
+        named_branch_events = runner.invoke(main, ["branch", "events", "feature/place"])
+        assert named_branch_events.exit_code == 0, named_branch_events.output
+        assert "No branch events on feature/place." in named_branch_events.output
     finally:
         os.chdir(old_cwd)
 

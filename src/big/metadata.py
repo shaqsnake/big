@@ -281,15 +281,16 @@ class SQLiteMetadataRepository(MetadataRepository):
                 (branch, expected_old_head, new_head, actor, created_at, reason),
             )
 
-    def list_branch_events(self, branch: str) -> list[BranchEvent]:
+    def list_branch_events(self, branch: str, limit: int = 20) -> list[BranchEvent]:
         with self.connect() as conn:
             rows = conn.execute(
                 """
                 SELECT * FROM branch_events
                 WHERE branch = ?
                 ORDER BY created_at DESC, id DESC
+                LIMIT ?
                 """,
-                (branch,),
+                (branch, limit),
             ).fetchall()
         return [_branch_event_from_row(row) for row in rows]
 

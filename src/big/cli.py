@@ -438,6 +438,30 @@ def branch_list_cmd(include_workspace: bool) -> None:
         click.echo(f"{item.kind} {item.name} {head} {owner} {source}")
 
 
+@branch.command("events")
+@click.argument("branch_name", required=False)
+@click.option("--limit", default=20, show_default=True, type=click.IntRange(min=1))
+def branch_events_cmd(branch_name: str | None, limit: int) -> None:
+    """Show branch audit events."""
+    config, metadata = _repo_from_cwd()
+    branch_name = branch_name or _current_workspace_branch(config)
+    if metadata.get_branch(branch_name) is None:
+        raise click.ClickException(f"Branch/ref not found: {branch_name}")
+
+    events = metadata.list_branch_events(branch_name, limit=limit)
+    if not events:
+        click.echo(f"No branch events on {branch_name}.")
+        return
+
+    for item in events:
+        reason = item.reason or "-"
+        click.echo(
+            f"{item.id} {item.event_type} {item.branch} "
+            f"{item.old_head_version_id}->{item.new_head_version_id} "
+            f"{item.actor} {item.created_at} {reason}"
+        )
+
+
 @branch.command("show")
 @click.argument("branch_name")
 def branch_show_cmd(branch_name: str) -> None:

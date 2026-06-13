@@ -192,12 +192,14 @@ big reset <old-version> --message 'rollback to initial place'
 ```bash
 big status
 big log
+big branch events
 ```
 
 期望：
 
 - `big status` 显示 `head: <old-version>`
 - `big log` 从当前 head 沿 parent 链显示历史，不再把被回退掉的 `<new-version>` 显示为当前可达历史。
+- `big branch events` 显示一条 `reset` 事件，包含 `<new-version>-><old-version>` 和 `rollback to initial place`。
 
 再次 reset 到同一个 version：
 
@@ -296,6 +298,7 @@ big branch show workspace/default/alice/APR
 - `big branch create`
 - `big branch list`
 - `big branch show`
+- `big branch events`
 
 暂未实现：
 
