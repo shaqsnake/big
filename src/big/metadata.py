@@ -47,6 +47,18 @@ class BranchRecord:
     owner: str
 
 
+@dataclass(frozen=True)
+class BranchEvent:
+    id: int
+    branch: str
+    event_type: str
+    old_head_version_id: str
+    new_head_version_id: str
+    actor: str
+    created_at: str
+    reason: str
+
+
 class MetadataRepository:
     def init_schema(self) -> None:
         raise NotImplementedError
@@ -114,10 +126,23 @@ class SQLiteMetadataRepository(MetadataRepository):
                     FOREIGN KEY (version_id) REFERENCES versions(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS branch_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    branch TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    old_head_version_id TEXT NOT NULL,
+                    new_head_version_id TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    reason TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_versions_branch_created
                     ON versions(branch, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_file_refs_hash
                     ON file_refs(cas_hash);
+                CREATE INDEX IF NOT EXISTS idx_branch_events_branch_created
+                    ON branch_events(branch, created_at DESC);
                 """
             )
             _ensure_column(conn, "branches", "kind", "TEXT NOT NULL DEFAULT 'named'")
@@ -209,6 +234,48 @@ class SQLiteMetadataRepository(MetadataRepository):
                 ).fetchall()
         return [_branch_from_row(row) for row in rows]
 
+    def reset_branch_head(
+        self,
+        branch: str,
+        expected_old_head: str,
+        new_head: str,
+        actor: str,
+        created_at: str,
+        reason: str,
+    ) -> None:
+        with self.connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE branches
+                SET head_version_id = ?
+                WHERE name = ? AND head_version_id = ?
+                """,
+                (new_head, branch, expected_old_head),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"Branch head changed before reset: {branch}")
+            conn.execute(
+                """
+                INSERT INTO branch_events(
+                    branch, event_type, old_head_version_id, new_head_version_id,
+                    actor, created_at, reason
+                ) VALUES (?, 'reset', ?, ?, ?, ?, ?)
+                """,
+                (branch, expected_old_head, new_head, actor, created_at, reason),
+            )
+
+    def list_branch_events(self, branch: str) -> list[BranchEvent]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM branch_events
+                WHERE branch = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (branch,),
+            ).fetchall()
+        return [_branch_event_from_row(row) for row in rows]
+
     def create_version(
         self,
         record: VersionRecord,
@@ -282,15 +349,26 @@ class SQLiteMetadataRepository(MetadataRepository):
 
     def list_versions(self, branch: str, limit: int = 20) -> list[VersionRecord]:
         with self.connect() as conn:
-            rows = conn.execute(
-                """
-                SELECT * FROM versions
-                WHERE branch = ?
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (branch, limit),
-            ).fetchall()
+            head = conn.execute(
+                "SELECT head_version_id FROM branches WHERE name = ?",
+                (branch,),
+            ).fetchone()
+            if head is None or head["head_version_id"] is None:
+                return []
+
+            rows: list[sqlite3.Row] = []
+            current_id: str | None = head["head_version_id"]
+            visited: set[str] = set()
+            while current_id is not None and len(rows) < limit and current_id not in visited:
+                visited.add(current_id)
+                row = conn.execute(
+                    "SELECT * FROM versions WHERE id = ?",
+                    (current_id,),
+                ).fetchone()
+                if row is None:
+                    break
+                rows.append(row)
+                current_id = row["parent_id"]
         return [_version_from_row(row) for row in rows]
 
     def get_version(self, version_ref: str) -> VersionRecord | None:
@@ -362,6 +440,19 @@ def _branch_from_row(row: sqlite3.Row) -> BranchRecord:
         source_ref=_row_value(row, "source_ref"),
         source_version_id=_row_value(row, "source_version_id"),
         owner=_row_value(row, "owner"),
+    )
+
+
+def _branch_event_from_row(row: sqlite3.Row) -> BranchEvent:
+    return BranchEvent(
+        id=row["id"],
+        branch=row["branch"],
+        event_type=row["event_type"],
+        old_head_version_id=row["old_head_version_id"],
+        new_head_version_id=row["new_head_version_id"],
+        actor=row["actor"],
+        created_at=row["created_at"],
+        reason=row["reason"],
     )
 
 

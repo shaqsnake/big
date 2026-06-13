@@ -147,7 +147,44 @@ big diff <old-version> <new-version> --verbose
 - diff 中出现 `~ input inputs/top.v`
 - diff 中出现 `~ output outputs/top_placed.def`
 
-### 用例 4：验证两个工程师目录互相隔离
+### 用例 4：只移动当前 ref head 的 reset
+
+将当前 workspace-private ref 回退到第一次提交：
+
+```bash
+big reset <old-version> --message 'rollback to initial place'
+```
+
+期望：
+
+- 输出 `branch: workspace/default/alice/APR`
+- 输出 `old_head: <new-version>`
+- 输出 `new_head: <old-version>`
+- 输出 `reset: moved`
+- 输出 `workspace_files: unchanged`
+- 工作目录里的文件不会被改回旧内容；例如刚才追加到 `inputs/top.v` 的 `// debug change` 仍然存在。
+
+查看 reset 后的当前上下文和历史：
+
+```bash
+big status
+big log
+```
+
+期望：
+
+- `big status` 显示 `head: <old-version>`
+- `big log` 从当前 head 沿 parent 链显示历史，不再把被回退掉的 `<new-version>` 显示为当前可达历史。
+
+再次 reset 到同一个 version：
+
+```bash
+big reset <old-version>
+```
+
+期望输出 `reset: no-op`。
+
+### 用例 5：验证两个工程师目录互相隔离
 
 进入另一个用户的同名 flow workspace：
 
@@ -177,7 +214,7 @@ big log
 - 显式执行 `big log workspace/default/alice/APR` 才会查看 `alice/APR` 的历史。
 - `big log main` 默认为空，除非你显式执行过 `big commit --branch main ...`。
 
-### 用例 5：从当前 workspace 创建命名 branch
+### 用例 6：从当前 workspace 创建命名 branch
 
 回到 alice 的 workspace：
 
@@ -230,6 +267,7 @@ big branch show workspace/default/alice/APR
 - `big log`
 - `big show`
 - `big diff`
+- `big reset`
 - `big branch create`
 - `big branch list`
 - `big branch show`
@@ -237,7 +275,6 @@ big branch show workspace/default/alice/APR
 暂未实现：
 
 - `big checkout`
-- `big reset`
 - `big restore --in-place`
 - Linux groups 权限接入
 - 3DIC 多 work root 指针配置

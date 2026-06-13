@@ -173,6 +173,24 @@ def _resolve_source_ref(
     return version.id, version.id
 
 
+def _is_ancestor_version(
+    metadata: SQLiteMetadataRepository,
+    head_version_id: str,
+    target_version_id: str,
+) -> bool:
+    current_id: str | None = head_version_id
+    visited: set[str] = set()
+    while current_id is not None and current_id not in visited:
+        if current_id == target_version_id:
+            return True
+        visited.add(current_id)
+        current = metadata.get_version(current_id)
+        if current is None:
+            return False
+        current_id = current.parent_id
+    return False
+
+
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 def main() -> None:
     """BIG prototype CLI for EDA artifact snapshots."""
@@ -264,6 +282,54 @@ def status_cmd() -> None:
     click.echo(f"head_state: [{version.review_state}/{version.retention_state}]")
     if version.message:
         click.echo(f"head_message: {version.message}")
+
+
+@main.command("reset")
+@click.argument("version")
+@click.option("--message", "-m", default="", help="Reason for the branch pointer reset.")
+def reset_cmd(version: str, message: str) -> None:
+    """Move the current ref head only; does not rewrite workspace files."""
+    config, metadata = _repo_from_cwd()
+    branch = _current_workspace_branch(config)
+    old_head = metadata.get_branch_head(branch)
+    if old_head is None:
+        raise click.ClickException(f"Current ref has no head version: {branch}")
+
+    target = metadata.get_version(version)
+    if target is None:
+        raise click.ClickException(f"Version not found or ambiguous: {version}")
+
+    if target.id == old_head:
+        click.echo(f"branch: {branch}")
+        click.echo(f"old_head: {old_head}")
+        click.echo(f"new_head: {target.id}")
+        click.echo("reset: no-op")
+        click.echo("workspace_files: unchanged")
+        return
+
+    if not _is_ancestor_version(metadata, old_head, target.id):
+        raise click.ClickException(
+            "Target version is not an ancestor of the current ref head; "
+            "cross-lineage reset is not supported in this prototype"
+        )
+
+    try:
+        metadata.reset_branch_head(
+            branch=branch,
+            expected_old_head=old_head,
+            new_head=target.id,
+            actor=getpass.getuser(),
+            created_at=_utc_now(),
+            reason=message,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"branch: {branch}")
+    click.echo(f"old_head: {old_head}")
+    click.echo(f"new_head: {target.id}")
+    click.echo("reset: moved")
+    click.echo("workspace_files: unchanged")
 
 
 @branch.command("create")

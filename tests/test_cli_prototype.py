@@ -7,6 +7,8 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from big.cli import main
+from big.config import find_config
+from big.metadata import SQLiteMetadataRepository
 
 
 def _write(path: Path, text: str) -> None:
@@ -125,6 +127,10 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert branch_list_all.exit_code == 0, branch_list_all.output
         assert "workspace workspace/default/alice/APR" in branch_list_all.output
 
+        named_branch_log = runner.invoke(main, ["log", "feature/place"])
+        assert named_branch_log.exit_code == 0, named_branch_log.output
+        assert first_version.group(1) in named_branch_log.output
+
         show = runner.invoke(main, ["show", first_version.group(1), "--full"])
         assert show.exit_code == 0, show.output
         assert "inputs: 2" in show.output
@@ -164,6 +170,45 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "recipe_hash: changed" in diff.output
         assert "~ input inputs/top.v" in diff.output
         assert "~ output outputs/top.def" in diff.output
+
+        reset = runner.invoke(
+            main,
+            [
+                "reset",
+                first_version.group(1),
+                "--message",
+                "rollback to initial place",
+            ],
+        )
+        assert reset.exit_code == 0, reset.output
+        assert "branch: workspace/default/alice/APR" in reset.output
+        assert f"old_head: {second_version.group(1)}" in reset.output
+        assert f"new_head: {first_version.group(1)}" in reset.output
+        assert "reset: moved" in reset.output
+        assert "workspace_files: unchanged" in reset.output
+        assert "wire a" in (workspace / "inputs" / "top.v").read_text(encoding="utf-8")
+
+        reset_log = runner.invoke(main, ["log"])
+        assert reset_log.exit_code == 0, reset_log.output
+        assert first_version.group(1) in reset_log.output
+        assert second_version.group(1) not in reset_log.output
+
+        reset_status = runner.invoke(main, ["status"])
+        assert reset_status.exit_code == 0, reset_status.output
+        assert f"head: {first_version.group(1)}" in reset_status.output
+
+        noop_reset = runner.invoke(main, ["reset", first_version.group(1)])
+        assert noop_reset.exit_code == 0, noop_reset.output
+        assert "reset: no-op" in noop_reset.output
+
+        config, _ = find_config(workspace)
+        events = SQLiteMetadataRepository(config.metadata_db).list_branch_events(
+            "workspace/default/alice/APR"
+        )
+        assert len(events) == 1
+        assert events[0].old_head_version_id == second_version.group(1)
+        assert events[0].new_head_version_id == first_version.group(1)
+        assert events[0].reason == "rollback to initial place"
     finally:
         os.chdir(old_cwd)
 
@@ -277,6 +322,14 @@ def test_default_workspace_histories_are_isolated_by_user_and_flow(
         main_log = runner.invoke(main, ["log", "main"])
         assert main_log.exit_code == 0, main_log.output
         assert "No versions visible on branch main." in main_log.output
+
+        os.chdir(shaq_workspace)
+        cross_reset = runner.invoke(main, ["reset", alice_version.group(1)])
+        assert cross_reset.exit_code != 0
+        assert "not an ancestor of the current ref head" in cross_reset.output
+        shaq_status = runner.invoke(main, ["status"])
+        assert shaq_status.exit_code == 0, shaq_status.output
+        assert f"head: {shaq_version.group(1)}" in shaq_status.output
     finally:
         os.chdir(old_cwd)
 
