@@ -152,6 +152,32 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     checkout_log = _run_big(["log"], target_path, env)
     _expect_contains(checkout_log, alice_version)
 
+    historical_plan = _run_big(
+        ["checkout", alice_version, "--new-branch", "from-v1", "--plan"],
+        alice_workspace,
+        env,
+    )
+    _expect_contains(historical_plan, "branch: from-v1")
+    _expect_contains(historical_plan, "branch_created: plan-only")
+    _expect_contains(historical_plan, "materialization: plan-only")
+    from_v1_path = Path(_value_from(historical_plan, "target_path"))
+    if from_v1_path.exists():
+        raise SystemExit(f"Plan-only historical checkout unexpectedly created: {from_v1_path}")
+
+    historical_checkout = _run_big(
+        ["checkout", alice_version, "--new-branch", "from-v1"],
+        alice_workspace,
+        env,
+    )
+    _expect_contains(historical_checkout, "branch: from-v1")
+    _expect_contains(historical_checkout, "branch_created: yes")
+    _expect_contains(historical_checkout, "materialization: copied")
+    if not (from_v1_path / ".big-checkout.json").exists():
+        raise SystemExit(f"Historical checkout marker is missing: {from_v1_path}")
+    from_v1_status = _run_big(["status"], from_v1_path, env)
+    _expect_contains(from_v1_status, "default_ref: from-v1")
+    _expect_contains(from_v1_status, f"head: {alice_version}")
+
     checkout_again = _run_big(["checkout", "feature/place"], alice_workspace, env)
     _expect_contains(checkout_again, "materialization: reused")
 

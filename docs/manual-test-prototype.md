@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、创建 `feature/place`、验证 checkout plan/copied/reused、shaqsnake 提交、验证两个用户的默认历史隔离、确认 `main` 仍为空，并检查 repo stats。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、确认 `main` 仍为空，并检查 repo stats。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
@@ -346,6 +346,22 @@ big checkout feature/place
 
 期望输出 `materialization: reused`，表示已有 marker 匹配同一个 repo、branch 和 version，原型直接复用已有物化目录。
 
+从历史版本创建新分支并物化为新的稳定目录：
+
+```bash
+big checkout <version> --new-branch from-v1 --plan
+big checkout <version> --new-branch from-v1
+cd -- .../user/alice/.big-checkouts/APR/from-v1/<version>
+big status
+```
+
+期望：
+
+- 带 `--plan` 时输出 `branch_created: plan-only`，不会创建 branch，也不会创建目标目录
+- 不带 `--plan` 时输出 `branch_created: yes` 和 `materialization: copied`
+- 新 branch `from-v1` 的 head 指向 `<version>`
+- 进入目标目录后执行 `big status`，会显示 `default_ref: from-v1`
+
 可选：在 Bash 或 Zsh 中启用 checkout 自动切目录：
 
 ```bash
@@ -377,6 +393,7 @@ pwd
 - `big reset`
 - `big checkout <branch>`
 - `big checkout <branch> --plan`
+- `big checkout <version> --new-branch <branch>`
 - `big shell-init bash|zsh`
 - `big branch create`
 - `big branch list`

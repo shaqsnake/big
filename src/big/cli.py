@@ -558,13 +558,18 @@ def repo_init(
 
 
 @main.command("checkout")
-@click.argument("branch_name")
+@click.argument("target_ref")
+@click.option(
+    "--new-branch",
+    default=None,
+    help="Create a named branch from a version ref before entering its checkout.",
+)
 @click.option(
     "--plan",
     is_flag=True,
     help="Resolve branch and target path only; do not materialize files.",
 )
-def checkout_cmd(branch_name: str, plan: bool) -> None:
+def checkout_cmd(target_ref: str, new_branch: str | None, plan: bool) -> None:
     """Checkout a branch into a user-private materialized directory."""
     config, metadata = _repo_from_cwd()
     try:
@@ -572,20 +577,36 @@ def checkout_cmd(branch_name: str, plan: bool) -> None:
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
 
-    branch_record = metadata.get_branch(branch_name)
-    if branch_record is None:
-        raise click.ClickException(f"Branch/ref not found: {branch_name}")
-    if branch_record.head_version_id is None:
-        raise click.ClickException(f"Branch/ref has no head version: {branch_name}")
-    version = metadata.get_version(branch_record.head_version_id)
-    if version is None:
-        raise click.ClickException(
-            f"Head version not found: {branch_record.head_version_id}"
-        )
+    source_ref = ""
+    if new_branch is not None:
+        _validate_branch_name(new_branch)
+        if metadata.get_branch(new_branch) is not None:
+            raise click.ClickException(f"Branch already exists: {new_branch}")
+        version = metadata.get_version(target_ref)
+        if version is None:
+            raise click.ClickException(f"Version not found or ambiguous: {target_ref}")
+        branch_name = new_branch
+        source_ref = version.id
+    else:
+        branch_record = metadata.get_branch(target_ref)
+        if branch_record is None:
+            if metadata.get_version(target_ref) is not None:
+                raise click.ClickException(
+                    "Version checkout requires --new-branch <branch-name>"
+                )
+            raise click.ClickException(f"Branch/ref not found: {target_ref}")
+        if branch_record.head_version_id is None:
+            raise click.ClickException(f"Branch/ref has no head version: {target_ref}")
+        version = metadata.get_version(branch_record.head_version_id)
+        if version is None:
+            raise click.ClickException(
+                f"Head version not found: {branch_record.head_version_id}"
+            )
+        branch_name = branch_record.name
 
     target_path = _checkout_target_path(
         workspace_context,
-        branch_name=branch_record.name,
+        branch_name=branch_name,
         version_id=version.id,
     )
     if target_path == workspace_context.workspace_path:
@@ -598,14 +619,30 @@ def checkout_cmd(branch_name: str, plan: bool) -> None:
         materialization = _materialize_checkout(
             config=config,
             workspace_context=workspace_context,
-            branch_name=branch_record.name,
+            branch_name=branch_name,
             version_id=version.id,
             target_path=target_path,
             refs=refs,
         )
+        if new_branch is not None:
+            try:
+                metadata.create_branch(
+                    name=new_branch,
+                    head_version_id=version.id,
+                    kind="named",
+                    created_at=_utc_now(),
+                    source_ref=source_ref,
+                    source_version_id=version.id,
+                    owner=getpass.getuser(),
+                )
+            except ValueError as exc:
+                raise click.ClickException(str(exc)) from exc
 
-    click.echo(f"branch: {branch_record.name}")
+    click.echo(f"branch: {branch_name}")
     click.echo(f"version: {version.id}")
+    if new_branch is not None:
+        click.echo(f"source_ref: {source_ref}")
+        click.echo(f"branch_created: {'plan-only' if plan else 'yes'}")
     click.echo(f"source_workspace: {workspace_context.workspace_path}")
     click.echo(f"target_path: {target_path}")
     click.echo(f"files: {len(refs)}")

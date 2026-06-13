@@ -101,6 +101,66 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "branch: feature/from-version" in branch_from_version.output
         assert f"source_ref: {first_version.group(1)}" in branch_from_version.output
 
+        checkout_from_version_plan = runner.invoke(
+            main,
+            [
+                "checkout",
+                first_version.group(1),
+                "--new-branch",
+                "from-v1",
+                "--plan",
+            ],
+        )
+        assert checkout_from_version_plan.exit_code == 0, checkout_from_version_plan.output
+        assert "branch: from-v1" in checkout_from_version_plan.output
+        assert f"version: {first_version.group(1)}" in checkout_from_version_plan.output
+        assert f"source_ref: {first_version.group(1)}" in checkout_from_version_plan.output
+        assert "branch_created: plan-only" in checkout_from_version_plan.output
+        assert "materialization: plan-only" in checkout_from_version_plan.output
+        from_v1_target = (
+            workspace.parent
+            / ".big-checkouts"
+            / "APR"
+            / "from-v1"
+            / first_version.group(1)
+        )
+        assert f"target_path: {from_v1_target}" in checkout_from_version_plan.output
+        assert not from_v1_target.exists()
+        from_v1_before_create = runner.invoke(main, ["branch", "show", "from-v1"])
+        assert from_v1_before_create.exit_code != 0
+        assert "Branch/ref not found: from-v1" in from_v1_before_create.output
+
+        checkout_from_version = runner.invoke(
+            main,
+            ["checkout", first_version.group(1), "--new-branch", "from-v1"],
+        )
+        assert checkout_from_version.exit_code == 0, checkout_from_version.output
+        assert "branch: from-v1" in checkout_from_version.output
+        assert "branch_created: yes" in checkout_from_version.output
+        assert "materialization: copied" in checkout_from_version.output
+        assert from_v1_target.exists()
+        assert (from_v1_target / "inputs" / "top.v").read_text(
+            encoding="utf-8"
+        ) == "module top; endmodule\n"
+        from_v1_show = runner.invoke(main, ["branch", "show", "from-v1"])
+        assert from_v1_show.exit_code == 0, from_v1_show.output
+        assert "branch: from-v1" in from_v1_show.output
+        assert f"head: {first_version.group(1)}" in from_v1_show.output
+        assert f"source_ref: {first_version.group(1)}" in from_v1_show.output
+
+        duplicate_new_branch = runner.invoke(
+            main,
+            ["checkout", first_version.group(1), "--new-branch", "from-v1"],
+        )
+        assert duplicate_new_branch.exit_code != 0
+        assert "Branch already exists: from-v1" in duplicate_new_branch.output
+
+        version_without_branch = runner.invoke(
+            main, ["checkout", first_version.group(1)]
+        )
+        assert version_without_branch.exit_code != 0
+        assert "Version checkout requires --new-branch" in version_without_branch.output
+
         branch_show = runner.invoke(main, ["branch", "show", "feature/place"])
         assert branch_show.exit_code == 0, branch_show.output
         assert "branch: feature/place" in branch_show.output
@@ -184,6 +244,7 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert branch_list.exit_code == 0, branch_list.output
         assert f"named feature/place {first_version.group(1)}" in branch_list.output
         assert f"named feature/from-version {first_version.group(1)}" in branch_list.output
+        assert f"named from-v1 {first_version.group(1)}" in branch_list.output
         assert "workspace workspace/default/alice/APR" not in branch_list.output
 
         branch_list_all = runner.invoke(main, ["branch", "list", "--all"])
