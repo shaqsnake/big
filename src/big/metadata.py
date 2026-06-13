@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 from pathlib import Path
 import sqlite3
 from typing import Iterable
@@ -70,6 +72,25 @@ class LifecycleEvent:
     actor: str
     created_at: str
     reason: str
+
+
+@dataclass(frozen=True)
+class AuditEvent:
+    id: int
+    action: str
+    entity_type: str
+    entity_id: str
+    actor: str
+    created_at: str
+    payload_json: str
+    previous_hash: str
+    event_hash: str
+
+
+@dataclass(frozen=True)
+class AuditChainIssue:
+    event_id: int
+    issue: str
 
 
 @dataclass(frozen=True)
@@ -180,6 +201,18 @@ class SQLiteMetadataRepository(MetadataRepository):
                     FOREIGN KEY (version_id) REFERENCES versions(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    action TEXT NOT NULL,
+                    entity_type TEXT NOT NULL,
+                    entity_id TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    previous_hash TEXT NOT NULL,
+                    event_hash TEXT NOT NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_versions_branch_created
                     ON versions(branch, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_file_refs_hash
@@ -188,6 +221,8 @@ class SQLiteMetadataRepository(MetadataRepository):
                     ON branch_events(branch, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_lifecycle_events_version_created
                     ON lifecycle_events(version_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_audit_events_created
+                    ON audit_events(created_at DESC, id DESC);
                 """
             )
             _ensure_column(conn, "branches", "kind", "TEXT NOT NULL DEFAULT 'named'")
@@ -262,6 +297,21 @@ class SQLiteMetadataRepository(MetadataRepository):
                 )
             except sqlite3.IntegrityError as exc:
                 raise ValueError(f"Branch already exists: {name}") from exc
+            _append_audit_event(
+                conn,
+                action="create_branch",
+                entity_type="branch",
+                entity_id=name,
+                actor=owner,
+                created_at=created_at,
+                payload={
+                    "name": name,
+                    "head_version_id": head_version_id,
+                    "kind": kind,
+                    "source_ref": source_ref,
+                    "source_version_id": source_version_id,
+                },
+            )
 
     def list_branches(self, include_workspace: bool = False) -> list[BranchRecord]:
         with self.connect() as conn:
@@ -307,6 +357,20 @@ class SQLiteMetadataRepository(MetadataRepository):
                 ) VALUES (?, 'reset', ?, ?, ?, ?, ?)
                 """,
                 (branch, expected_old_head, new_head, actor, created_at, reason),
+            )
+            _append_audit_event(
+                conn,
+                action="reset",
+                entity_type="branch",
+                entity_id=branch,
+                actor=actor,
+                created_at=created_at,
+                payload={
+                    "branch": branch,
+                    "old_head_version_id": expected_old_head,
+                    "new_head_version_id": new_head,
+                    "reason": reason,
+                },
             )
 
     def list_branch_events(self, branch: str, limit: int = 20) -> list[BranchEvent]:
@@ -375,6 +439,22 @@ class SQLiteMetadataRepository(MetadataRepository):
                     reason,
                 ),
             )
+            _append_audit_event(
+                conn,
+                action="promote",
+                entity_type="version",
+                entity_id=version_id,
+                actor=actor,
+                created_at=created_at,
+                payload={
+                    "version_id": version_id,
+                    "old_review_state": old_review_state,
+                    "new_review_state": new_review_state,
+                    "old_retention_state": old_retention_state,
+                    "new_retention_state": old_retention_state,
+                    "reason": reason,
+                },
+            )
 
     def list_lifecycle_events(
         self,
@@ -392,6 +472,58 @@ class SQLiteMetadataRepository(MetadataRepository):
                 (version_id, limit),
             ).fetchall()
         return [_lifecycle_event_from_row(row) for row in rows]
+
+    def list_audit_events(self, limit: int = 20) -> list[AuditEvent]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM audit_events
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [_audit_event_from_row(row) for row in rows]
+
+    def verify_audit_chain(self) -> tuple[int, list[AuditChainIssue]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM audit_events
+                ORDER BY id ASC
+                """
+            ).fetchall()
+
+        issues: list[AuditChainIssue] = []
+        previous_hash = ""
+        for row in rows:
+            event = _audit_event_from_row(row)
+            if event.previous_hash != previous_hash:
+                issues.append(
+                    AuditChainIssue(
+                        event_id=event.id,
+                        issue="previous_hash mismatch",
+                    )
+                )
+            expected_hash = _audit_hash(
+                action=event.action,
+                entity_type=event.entity_type,
+                entity_id=event.entity_id,
+                actor=event.actor,
+                created_at=event.created_at,
+                payload_json=event.payload_json,
+                previous_hash=event.previous_hash,
+            )
+            if event.event_hash != expected_hash:
+                issues.append(
+                    AuditChainIssue(
+                        event_id=event.id,
+                        issue="event_hash mismatch",
+                    )
+                )
+            previous_hash = event.event_hash
+
+        return len(rows), issues
 
     def storage_summary(self) -> StorageSummary:
         with self.connect() as conn:
@@ -448,6 +580,7 @@ class SQLiteMetadataRepository(MetadataRepository):
         record: VersionRecord,
         files: Iterable[FileRef],
     ) -> None:
+        file_refs = list(files)
         with self.connect() as conn:
             conn.execute(
                 """
@@ -506,12 +639,34 @@ class SQLiteMetadataRepository(MetadataRepository):
                         item.semantic_role,
                         item.format_hint,
                     )
-                    for item in files
+                    for item in file_refs
                 ],
             )
             conn.execute(
                 "UPDATE branches SET head_version_id = ? WHERE name = ?",
                 (record.id, record.branch),
+            )
+            _append_audit_event(
+                conn,
+                action="commit",
+                entity_type="version",
+                entity_id=record.id,
+                actor=record.author,
+                created_at=record.created_at,
+                payload={
+                    "version_id": record.id,
+                    "branch": record.branch,
+                    "parent_id": record.parent_id or "",
+                    "step": record.step,
+                    "message": record.message,
+                    "recipe_hash": record.recipe_hash,
+                    "manifest_hash": record.manifest_hash,
+                    "review_state": record.review_state,
+                    "retention_state": record.retention_state,
+                    "workspace_id": record.workspace_id,
+                    "input_count": sum(1 for item in file_refs if item.role == "input"),
+                    "output_count": sum(1 for item in file_refs if item.role == "output"),
+                },
             )
 
     def list_versions(self, branch: str, limit: int = 20) -> list[VersionRecord]:
@@ -661,6 +816,88 @@ def _lifecycle_event_from_row(row: sqlite3.Row) -> LifecycleEvent:
         created_at=row["created_at"],
         reason=row["reason"],
     )
+
+
+def _audit_event_from_row(row: sqlite3.Row) -> AuditEvent:
+    return AuditEvent(
+        id=row["id"],
+        action=row["action"],
+        entity_type=row["entity_type"],
+        entity_id=row["entity_id"],
+        actor=row["actor"],
+        created_at=row["created_at"],
+        payload_json=row["payload_json"],
+        previous_hash=row["previous_hash"],
+        event_hash=row["event_hash"],
+    )
+
+
+def _append_audit_event(
+    conn: sqlite3.Connection,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    actor: str,
+    created_at: str,
+    payload: dict[str, object],
+) -> None:
+    previous = conn.execute(
+        "SELECT event_hash FROM audit_events ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    previous_hash = "" if previous is None else previous["event_hash"]
+    payload_json = _canonical_json(payload)
+    event_hash = _audit_hash(
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        actor=actor,
+        created_at=created_at,
+        payload_json=payload_json,
+        previous_hash=previous_hash,
+    )
+    conn.execute(
+        """
+        INSERT INTO audit_events(
+            action, entity_type, entity_id, actor, created_at, payload_json,
+            previous_hash, event_hash
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            action,
+            entity_type,
+            entity_id,
+            actor,
+            created_at,
+            payload_json,
+            previous_hash,
+            event_hash,
+        ),
+    )
+
+
+def _audit_hash(
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    actor: str,
+    created_at: str,
+    payload_json: str,
+    previous_hash: str,
+) -> str:
+    payload = {
+        "action": action,
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "actor": actor,
+        "created_at": created_at,
+        "payload_json": payload_json,
+        "previous_hash": previous_hash,
+    }
+    return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+
+def _canonical_json(payload: object) -> str:
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _branch_kind(branch_name: str) -> str:

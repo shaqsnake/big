@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、确认 `main` 仍为空，并检查 repo stats。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
@@ -197,7 +197,22 @@ big promote <version> --to Golden --confirm GOLDEN --message 'tapeout approved'
 - 未提供 `--confirm GOLDEN` 时命令失败
 - 已经处于更高评审阶段的 version 不能被降级到更低阶段
 
-### 用例 4：修改后再次提交并 diff
+### 用例 4：查看和校验审计 hash-chain
+
+每次 `commit`、`branch create`、`reset` 和 `promote` 都会追加一条本地 audit 事件，并用上一条事件 hash 串成链：
+
+```bash
+big audit log --full
+big audit verify
+```
+
+期望：
+
+- `big audit log --full` 展示最近写操作的 action、entity、actor、时间、event hash、previous hash 和 payload 摘要
+- `big audit verify` 输出 `integrity: ok`
+- 当前原型只实现本地 hash-chain 校验；还没有实现服务端 append-only 审计日志、外部不可变介质锚定或审计导出。
+
+### 用例 5：修改后再次提交并 diff
 
 修改文件：
 
@@ -227,7 +242,7 @@ big diff <old-version> <new-version> --verbose
 - diff 中出现 `~ input inputs/top.v`
 - diff 中出现 `~ output outputs/top_placed.def`
 
-### 用例 5：只移动当前 ref head 的 reset
+### 用例 6：只移动当前 ref head 的 reset
 
 将当前 workspace-private ref 回退到第一次提交：
 
@@ -266,7 +281,7 @@ big reset <old-version>
 
 期望输出 `reset: no-op`。
 
-### 用例 6：验证两个工程师目录互相隔离
+### 用例 7：验证两个工程师目录互相隔离
 
 进入另一个用户的同名 flow workspace：
 
@@ -296,7 +311,7 @@ big log
 - 显式执行 `big log workspace/default/alice/APR` 才会查看 `alice/APR` 的历史。
 - `big log main` 默认为空，除非你显式执行过 `big commit --branch main ...`。
 
-### 用例 7：从当前 workspace 创建命名 branch
+### 用例 8：从当前 workspace 创建命名 branch
 
 回到 alice 的 workspace：
 
@@ -339,7 +354,7 @@ big branch show workspace/default/alice/APR
 
 此时会额外显示 workspace-private ref。
 
-### 用例 8：checkout 目标路径、copy-only 物化和 shell 集成
+### 用例 9：checkout 目标路径、copy-only 物化和 shell 集成
 
 当前原型支持两步验证 checkout：先用 `--plan` 确认目标 branch、head version 和稳定目录路径；再执行不带 `--plan` 的 `big checkout <branch>`，把该 version 的 FileRef 从 CAS 复制到用户私有目标目录。CLI 子进程本身不能切换父 shell 的当前目录；未启用 shell 集成时，需要手工执行输出中的 `cd -- <target-path>`。启用 shell 集成后，wrapper 会在 checkout 成功物化或复用目录后自动进入目标目录。
 
@@ -441,6 +456,8 @@ pwd
 - `big diff`
 - `big promote`
 - `big lifecycle events`
+- `big audit log`
+- `big audit verify`
 - `big reset`
 - `big checkout <branch>`
 - `big checkout <branch> --plan`

@@ -501,6 +501,11 @@ def lifecycle() -> None:
     """Lifecycle metadata commands."""
 
 
+@main.group()
+def audit() -> None:
+    """Audit hash-chain commands."""
+
+
 @repo.command("init")
 @click.argument("path", type=click.Path(path_type=Path))
 @click.option("--repo-id", required=True, help="Logical BIG repository id.")
@@ -1003,6 +1008,46 @@ def lifecycle_events_cmd(version: str, limit: int) -> None:
             f"{item.old_retention_state}->{item.new_retention_state} "
             f"{item.actor} {item.created_at} {reason}"
         )
+
+
+@audit.command("log")
+@click.option("--limit", default=20, show_default=True, type=click.IntRange(min=1))
+@click.option("--full", "show_full", is_flag=True, help="Show audit payload JSON.")
+def audit_log_cmd(limit: int, show_full: bool) -> None:
+    """Show recent audit hash-chain events."""
+    _, metadata = _repo_from_cwd()
+    events = metadata.list_audit_events(limit=limit)
+    if not events:
+        click.echo("No audit events.")
+        return
+
+    for item in events:
+        previous = _short_hash(item.previous_hash) if item.previous_hash else "-"
+        click.echo(
+            f"{item.id} {item.action} {item.entity_type} {item.entity_id} "
+            f"{item.actor} {item.created_at} "
+            f"hash={_short_hash(item.event_hash)} prev={previous}"
+        )
+        if show_full:
+            click.echo(f"  payload: {item.payload_json}")
+
+
+@audit.command("verify")
+@click.option("--full", "show_full", is_flag=True, help="Show every broken event.")
+def audit_verify_cmd(show_full: bool) -> None:
+    """Verify the audit hash chain."""
+    _, metadata = _repo_from_cwd()
+    total, issues = metadata.verify_audit_chain()
+    click.echo(f"events: {total}")
+    click.echo(f"broken: {len(issues)}")
+    click.echo(f"integrity: {'ok' if not issues else 'failed'}")
+
+    if show_full and issues:
+        for item in issues:
+            click.echo(f"broken {item.event_id}: {item.issue}")
+
+    if issues:
+        raise click.ClickException("Audit hash-chain verification failed")
 
 
 @branch.command("create")

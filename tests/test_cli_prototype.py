@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -80,6 +81,18 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         log = runner.invoke(main, ["log"])
         assert log.exit_code == 0, log.output
         assert first_version.group(1) in log.output
+
+        audit_verify = runner.invoke(main, ["audit", "verify"])
+        assert audit_verify.exit_code == 0, audit_verify.output
+        assert "events: 1" in audit_verify.output
+        assert "integrity: ok" in audit_verify.output
+
+        audit_log = runner.invoke(main, ["audit", "log", "--full"])
+        assert audit_log.exit_code == 0, audit_log.output
+        assert f"commit version {first_version.group(1)}" in audit_log.output
+        assert '"branch":"workspace/default/alice/APR"' in audit_log.output
+        assert '"input_count":2' in audit_log.output
+        assert '"output_count":2' in audit_log.output
 
         branch_create = runner.invoke(main, ["branch", "create", "feature/place"])
         assert branch_create.exit_code == 0, branch_create.output
@@ -523,6 +536,17 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert checkout_branch_log.exit_code == 0, checkout_branch_log.output
         assert checkout_version.group(1) in checkout_branch_log.output
         assert first_version.group(1) in checkout_branch_log.output
+
+        final_audit_verify = runner.invoke(main, ["audit", "verify"])
+        assert final_audit_verify.exit_code == 0, final_audit_verify.output
+        assert "integrity: ok" in final_audit_verify.output
+
+        final_audit_log = runner.invoke(main, ["audit", "log", "--limit", "20"])
+        assert final_audit_log.exit_code == 0, final_audit_log.output
+        assert f"commit version {checkout_version.group(1)}" in final_audit_log.output
+        assert f"promote version {second_version.group(1)}" in final_audit_log.output
+        assert "reset branch workspace/default/alice/APR" in final_audit_log.output
+        assert "create_branch branch feature/place" in final_audit_log.output
     finally:
         os.chdir(old_cwd)
 
@@ -553,6 +577,50 @@ def test_commit_rejects_missing_inputs(tmp_path: Path) -> None:
         )
         assert result.exit_code != 0
         assert "No input files matched" in result.output
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_audit_verify_detects_tampered_event(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "audit snapshot",
+            ],
+        )
+        assert commit.exit_code == 0, commit.output
+
+        config, _ = find_config(workspace)
+        with sqlite3.connect(config.metadata_db) as conn:
+            conn.execute(
+                "UPDATE audit_events SET payload_json = ? WHERE id = 1",
+                ('{"tampered":true}',),
+            )
+
+        verify = runner.invoke(main, ["audit", "verify", "--full"])
+        assert verify.exit_code != 0
+        assert "integrity: failed" in verify.output
+        assert "broken 1: event_hash mismatch" in verify.output
     finally:
         os.chdir(old_cwd)
 

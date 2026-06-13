@@ -264,6 +264,15 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     _expect_contains(stats, "file_refs: 10")
     _expect_contains(stats, "unique_referenced_objects: 4")
     _expect_contains(stats, "cas_objects: 4")
+
+    audit_verify = _run_big(["audit", "verify"], alice_workspace, env)
+    _expect_contains(audit_verify, "events: 5")
+    _expect_contains(audit_verify, "integrity: ok")
+
+    audit_log = _run_big(["audit", "log", "--limit", "5"], alice_workspace, env)
+    _expect_contains(audit_log, f"commit version {shaq_version}")
+    _expect_contains(audit_log, f"promote version {alice_version}")
+    _expect_contains(audit_log, "create_branch branch feature/place")
     print("manual smoke: ok")
 
 
