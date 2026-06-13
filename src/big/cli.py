@@ -18,6 +18,7 @@ from .config import (
     CONFIG_NAME,
     ensure_repo_dirs,
     find_config,
+    resolve_work_root,
     resolve_workspace_context,
     write_main_config,
 )
@@ -214,6 +215,55 @@ def repo_init(path: Path, repo_id: str, integration: str) -> None:
     click.echo(f"repo: {config.repo_id}")
     click.echo(f"home: {config.home}")
     click.echo(f"metadata: {config.metadata_db}")
+
+
+@main.command("status")
+def status_cmd() -> None:
+    """Show current repo and workspace context."""
+    cwd = Path.cwd().resolve()
+    config, metadata = _repo_from_cwd()
+    click.echo(f"repo: {config.repo_id}")
+    click.echo(f"integration: {config.integration}")
+    click.echo(f"home: {config.home}")
+    click.echo(f"cwd: {cwd}")
+
+    try:
+        work_root = resolve_work_root(config, cwd)
+    except ValueError as exc:
+        click.echo("work_root: -")
+        click.echo("workspace: -")
+        click.echo(f"context_error: {exc}")
+        return
+    click.echo(f"work_root: {work_root.id} {work_root.path}")
+
+    try:
+        workspace_context = resolve_workspace_context(config, cwd)
+    except ValueError as exc:
+        click.echo("workspace: -")
+        click.echo("default_ref: -")
+        click.echo(f"context_error: {exc}")
+        return
+
+    default_ref = workspace_context.default_branch
+    head = metadata.get_branch_head(default_ref)
+    click.echo(f"workspace: {workspace_context.workspace_id}")
+    click.echo(f"user: {workspace_context.user}")
+    click.echo(f"flow: {workspace_context.flow}")
+    click.echo(f"workspace_path: {workspace_context.workspace_path}")
+    click.echo(f"default_ref: {default_ref}")
+    click.echo(f"head: {head or '-'}")
+
+    if head is None:
+        return
+
+    version = metadata.get_version(head)
+    if version is None:
+        click.echo("head_record: missing")
+        return
+    click.echo(f"head_step: {version.step}")
+    click.echo(f"head_state: [{version.review_state}/{version.retention_state}]")
+    if version.message:
+        click.echo(f"head_message: {version.message}")
 
 
 @branch.command("create")

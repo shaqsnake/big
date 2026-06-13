@@ -73,6 +73,20 @@ big repo init manual-lab/data/WslChip --repo-id WslChip
 cd manual-lab/data/WslChip/user/alice/APR
 ```
 
+查看当前 BIG 解析到的仓库和 workspace：
+
+```bash
+big status
+```
+
+期望：
+
+- 输出 `repo: WslChip`
+- 输出 `work_root: default ...`
+- 输出 `workspace: user/alice/APR`
+- 输出 `default_ref: workspace/default/alice/APR`
+- 首次提交前 `head: -`
+
 ### 用例 1：首次提交
 
 ```bash
@@ -92,12 +106,14 @@ big commit --step place \
 ### 用例 2：查看历史和详情
 
 ```bash
+big status
 big log
 big show <version> --full
 ```
 
 期望：
 
+- `big status` 显示当前 workspace 的 `head` 等于刚才提交的 version ID
 - `big log` 显示刚才的 version ID
 - `big show --full` 展示 inputs、outputs、SHA-256 摘要和状态 `[Exploring/resident]`
 
@@ -209,6 +225,7 @@ big branch show workspace/default/alice/APR
 已实现：
 
 - `big repo init`
+- `big status`
 - `big commit`
 - `big log`
 - `big show`

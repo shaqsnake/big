@@ -32,6 +32,15 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
 
     old_cwd = Path.cwd()
     try:
+        os.chdir(repo_root)
+        root_status = runner.invoke(main, ["status"])
+        assert root_status.exit_code == 0, root_status.output
+        assert "repo: DemoChip" in root_status.output
+        assert "integration: 2d" in root_status.output
+        assert "work_root: default" in root_status.output
+        assert "workspace: -" in root_status.output
+        assert "context_error:" in root_status.output
+
         os.chdir(workspace)
         first = runner.invoke(
             main,
@@ -52,6 +61,17 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert first_version
         assert "branch: workspace/default/alice/APR" in first.output
         assert "workspace: user/alice/APR" in first.output
+
+        status = runner.invoke(main, ["status"])
+        assert status.exit_code == 0, status.output
+        assert "repo: DemoChip" in status.output
+        assert "workspace: user/alice/APR" in status.output
+        assert "user: alice" in status.output
+        assert "flow: APR" in status.output
+        assert "default_ref: workspace/default/alice/APR" in status.output
+        assert f"head: {first_version.group(1)}" in status.output
+        assert "head_step: place" in status.output
+        assert "head_message: initial place snapshot" in status.output
 
         log = runner.invoke(main, ["log"])
         assert log.exit_code == 0, log.output

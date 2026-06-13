@@ -26,5 +26,6 @@ lab:
 
 smoke: lab
 	$(PYTHONPATH_ENV) $(PYTHON) -m big repo init $(LAB_ROOT) --repo-id $(REPO_ID)
+	cd $(WORKSPACE) && $(PYTHONPATH_ENV) $(PYTHON) -m big status
 	cd $(WORKSPACE) && $(PYTHONPATH_ENV) $(PYTHON) -m big commit --step place --inputs 'inputs/**;scripts/**' --outputs 'outputs/**;reports/**' --message 'wsl smoke snapshot'
 	cd $(WORKSPACE) && $(PYTHONPATH_ENV) $(PYTHON) -m big log --limit 1
