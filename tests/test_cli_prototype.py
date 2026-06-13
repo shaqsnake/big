@@ -145,6 +145,16 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "files: 4" in verify.output
         assert "integrity: ok" in verify.output
 
+        stats = runner.invoke(main, ["repo", "stats"])
+        assert stats.exit_code == 0, stats.output
+        assert "repo: DemoChip" in stats.output
+        assert "versions: 1" in stats.output
+        assert "file_refs: 4" in stats.output
+        assert "unique_referenced_objects: 4" in stats.output
+        assert "cas_objects: 4" in stats.output
+        assert "dedupe_ratio: 1.00x" in stats.output
+        assert "resident: versions=1" in stats.output
+
         _write(workspace / "inputs" / "top.v", "module top; wire a; endmodule\n")
         _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\nCOMPONENTS 1 ;\n")
         second = runner.invoke(

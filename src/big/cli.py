@@ -241,6 +241,48 @@ def repo_init(path: Path, repo_id: str, integration: str) -> None:
     click.echo(f"metadata: {config.metadata_db}")
 
 
+@repo.command("stats")
+def repo_stats_cmd() -> None:
+    """Show repository storage usage statistics."""
+    config, metadata = _repo_from_cwd()
+    summary = metadata.storage_summary()
+    cas_objects, cas_bytes = _scan_cas_objects(config.cas_dir)
+    dedupe_ratio = (
+        summary.logical_bytes / summary.unique_referenced_bytes
+        if summary.unique_referenced_bytes
+        else 1.0
+    )
+
+    click.echo(f"repo: {config.repo_id}")
+    click.echo(f"versions: {summary.versions}")
+    click.echo(f"file_refs: {summary.file_refs}")
+    click.echo(f"logical_bytes: {summary.logical_bytes}")
+    click.echo(f"unique_referenced_objects: {summary.unique_referenced_objects}")
+    click.echo(f"unique_referenced_bytes: {summary.unique_referenced_bytes}")
+    click.echo(f"cas_objects: {cas_objects}")
+    click.echo(f"cas_bytes: {cas_bytes}")
+    click.echo(f"dedupe_ratio: {dedupe_ratio:.2f}x")
+    if summary.by_retention:
+        click.echo("retention:")
+        for item in summary.by_retention:
+            click.echo(
+                f"  {item.retention_state}: "
+                f"versions={item.versions} logical_bytes={item.logical_bytes}"
+            )
+
+
+def _scan_cas_objects(cas_dir: Path) -> tuple[int, int]:
+    if not cas_dir.exists():
+        return 0, 0
+    count = 0
+    total_bytes = 0
+    for path in cas_dir.rglob("*"):
+        if path.is_file():
+            count += 1
+            total_bytes += path.stat().st_size
+    return count, total_bytes
+
+
 @main.command("status")
 def status_cmd() -> None:
     """Show current repo and workspace context."""

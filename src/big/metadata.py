@@ -59,6 +59,23 @@ class BranchEvent:
     reason: str
 
 
+@dataclass(frozen=True)
+class RetentionStorageSummary:
+    retention_state: str
+    versions: int
+    logical_bytes: int
+
+
+@dataclass(frozen=True)
+class StorageSummary:
+    versions: int
+    file_refs: int
+    logical_bytes: int
+    unique_referenced_objects: int
+    unique_referenced_bytes: int
+    by_retention: tuple[RetentionStorageSummary, ...]
+
+
 class MetadataRepository:
     def init_schema(self) -> None:
         raise NotImplementedError
@@ -275,6 +292,56 @@ class SQLiteMetadataRepository(MetadataRepository):
                 (branch,),
             ).fetchall()
         return [_branch_event_from_row(row) for row in rows]
+
+    def storage_summary(self) -> StorageSummary:
+        with self.connect() as conn:
+            version_row = conn.execute(
+                "SELECT COUNT(*) AS count FROM versions"
+            ).fetchone()
+            ref_row = conn.execute(
+                """
+                SELECT COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes
+                FROM file_refs
+                """
+            ).fetchone()
+            unique_row = conn.execute(
+                """
+                SELECT COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes
+                FROM (
+                    SELECT cas_hash, MAX(size) AS size
+                    FROM file_refs
+                    GROUP BY cas_hash
+                )
+                """
+            ).fetchone()
+            retention_rows = conn.execute(
+                """
+                SELECT
+                    versions.retention_state AS retention_state,
+                    COUNT(DISTINCT versions.id) AS versions,
+                    COALESCE(SUM(file_refs.size), 0) AS logical_bytes
+                FROM versions
+                LEFT JOIN file_refs ON file_refs.version_id = versions.id
+                GROUP BY versions.retention_state
+                ORDER BY versions.retention_state
+                """
+            ).fetchall()
+
+        return StorageSummary(
+            versions=version_row["count"],
+            file_refs=ref_row["count"],
+            logical_bytes=ref_row["bytes"],
+            unique_referenced_objects=unique_row["count"],
+            unique_referenced_bytes=unique_row["bytes"],
+            by_retention=tuple(
+                RetentionStorageSummary(
+                    retention_state=row["retention_state"],
+                    versions=row["versions"],
+                    logical_bytes=row["logical_bytes"],
+                )
+                for row in retention_rows
+            ),
+        )
 
     def create_version(
         self,

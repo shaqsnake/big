@@ -29,3 +29,4 @@ smoke: lab
 	cd $(WORKSPACE) && $(PYTHONPATH_ENV) $(PYTHON) -m big status
 	cd $(WORKSPACE) && $(PYTHONPATH_ENV) $(PYTHON) -m big commit --step place --inputs 'inputs/**;scripts/**' --outputs 'outputs/**;reports/**' --message 'wsl smoke snapshot'
 	cd $(WORKSPACE) && $(PYTHONPATH_ENV) $(PYTHON) -m big log --limit 1
+	cd $(WORKSPACE) && $(PYTHONPATH_ENV) $(PYTHON) -m big repo stats

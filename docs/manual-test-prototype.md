@@ -112,6 +112,18 @@ find manual-lab/data/WslChip/.big/cas/objects -type f -perm /222 -print
 
 期望：没有输出。CAS 对象应被发布为只读文件；如果已有合法 CAS 对象曾被误改成可写，再次提交相同内容时也会被重新收紧为只读。
 
+查看仓库存储统计：
+
+```bash
+big repo stats
+```
+
+期望：
+
+- 输出 `versions`、`file_refs`、`logical_bytes`、`unique_referenced_bytes`、`cas_objects` 和 `cas_bytes`
+- 输出 `dedupe_ratio: ...x`
+- 输出按 `retention_state` 聚合的版本数和逻辑字节数，例如 `resident`
+
 ### 用例 2：查看历史和详情
 
 ```bash
@@ -273,6 +285,7 @@ big branch show workspace/default/alice/APR
 已实现：
 
 - `big repo init`
+- `big repo stats`
 - `big status`
 - `big commit`
 - `big log`
