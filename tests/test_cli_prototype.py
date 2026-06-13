@@ -297,6 +297,13 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "files: 4" in verify.output
         assert "integrity: ok" in verify.output
 
+        repo_verify = runner.invoke(main, ["repo", "verify"])
+        assert repo_verify.exit_code == 0, repo_verify.output
+        assert "repo: DemoChip" in repo_verify.output
+        assert "versions: 1" in repo_verify.output
+        assert "file_refs: 4" in repo_verify.output
+        assert "integrity: ok" in repo_verify.output
+
         stats = runner.invoke(main, ["repo", "stats"])
         assert stats.exit_code == 0, stats.output
         assert "repo: DemoChip" in stats.output
@@ -690,5 +697,14 @@ def test_verify_reports_missing_cas_object(tmp_path: Path) -> None:
         assert "missing: 1" in verify.output
         assert "missing " in verify.output
         assert "CAS integrity verification failed" in verify.output
+
+        repo_verify = runner.invoke(main, ["repo", "verify", "--full"])
+        assert repo_verify.exit_code != 0
+        assert "repo: DemoChip" in repo_verify.output
+        assert "versions: 1" in repo_verify.output
+        assert "file_refs: 2" in repo_verify.output
+        assert "integrity: failed" in repo_verify.output
+        assert f"missing {version.group(1)} " in repo_verify.output
+        assert "Repository CAS integrity verification failed" in repo_verify.output
     finally:
         os.chdir(old_cwd)

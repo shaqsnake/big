@@ -225,6 +225,11 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     main_log = _run_big(["log", "main"], alice_workspace, env)
     _expect_contains(main_log, "No versions visible on branch main.")
 
+    repo_verify = _run_big(["repo", "verify"], alice_workspace, env)
+    _expect_contains(repo_verify, "versions: 2")
+    _expect_contains(repo_verify, "file_refs: 10")
+    _expect_contains(repo_verify, "integrity: ok")
+
     stats = _run_big(["repo", "stats"], alice_workspace, env)
     _expect_contains(stats, "versions: 2")
     _expect_contains(stats, "file_refs: 10")

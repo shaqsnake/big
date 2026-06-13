@@ -477,6 +477,32 @@ class SQLiteMetadataRepository(MetadataRepository):
             for row in rows
         ]
 
+    def list_all_file_refs(self) -> list[tuple[str, FileRef]]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    version_id, role, path, cas_hash, size, semantic_role,
+                    format_hint
+                FROM file_refs
+                ORDER BY version_id, role, path
+                """
+            ).fetchall()
+        return [
+            (
+                row["version_id"],
+                FileRef(
+                    role=row["role"],
+                    path=row["path"],
+                    cas_hash=row["cas_hash"],
+                    size=row["size"],
+                    semantic_role=row["semantic_role"],
+                    format_hint=row["format_hint"],
+                ),
+            )
+            for row in rows
+        ]
+
 
 def _version_from_row(row: sqlite3.Row) -> VersionRecord:
     return VersionRecord(

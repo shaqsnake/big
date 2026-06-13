@@ -154,6 +154,7 @@ big status
 big log
 big show <version> --full
 big verify <version>
+big repo verify
 ```
 
 期望：
@@ -162,6 +163,7 @@ big verify <version>
 - `big log` 显示刚才的 version ID
 - `big show --full` 展示 inputs、outputs、SHA-256 摘要和状态 `[Exploring/resident]`
 - `big verify <version>` 输出 `integrity: ok`，表示该 version manifest 引用的 CAS 对象存在、大小一致且 SHA-256 校验通过。
+- `big repo verify` 输出 `integrity: ok`，表示仓库内所有 manifest 引用的 CAS 对象都通过完整性检查；如果失败，可加 `--full` 查看具体 version 和 FileRef。
 
 ### 用例 3：修改后再次提交并 diff
 
@@ -396,6 +398,7 @@ pwd
 
 - `big repo init`
 - `big repo stats`
+- `big repo verify`
 - `big status`
 - `big repo init --work-root id=path` 创建 3DIC 指针型 work root 配置
 - `big commit`

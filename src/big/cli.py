@@ -706,6 +706,36 @@ def repo_stats_cmd() -> None:
             )
 
 
+@repo.command("verify")
+@click.option("--full", "show_full", is_flag=True, help="Show every failed FileRef.")
+def repo_verify_cmd(show_full: bool) -> None:
+    """Verify every referenced CAS object in the repository."""
+    config, metadata = _repo_from_cwd()
+    summary = metadata.storage_summary()
+    refs = metadata.list_all_file_refs()
+    missing, size_mismatch, hash_mismatch = _verify_file_refs(config.cas_dir, refs)
+    failures = len(missing) + len(size_mismatch) + len(hash_mismatch)
+
+    click.echo(f"repo: {config.repo_id}")
+    click.echo(f"versions: {summary.versions}")
+    click.echo(f"file_refs: {len(refs)}")
+    click.echo(f"missing: {len(missing)}")
+    click.echo(f"size_mismatch: {len(size_mismatch)}")
+    click.echo(f"hash_mismatch: {len(hash_mismatch)}")
+    click.echo(f"integrity: {'ok' if failures == 0 else 'failed'}")
+
+    if show_full and failures:
+        _print_integrity_failures(
+            missing,
+            size_mismatch,
+            hash_mismatch,
+            include_version=True,
+        )
+
+    if failures:
+        raise click.ClickException("Repository CAS integrity verification failed")
+
+
 def _scan_cas_objects(cas_dir: Path) -> tuple[int, int]:
     if not cas_dir.exists():
         return 0, 0
@@ -716,6 +746,57 @@ def _scan_cas_objects(cas_dir: Path) -> tuple[int, int]:
             count += 1
             total_bytes += path.stat().st_size
     return count, total_bytes
+
+
+def _verify_file_refs(
+    cas_dir: Path,
+    refs: list[tuple[str, FileRef]],
+) -> tuple[
+    list[tuple[str, FileRef]],
+    list[tuple[str, FileRef, int]],
+    list[tuple[str, FileRef, str]],
+]:
+    missing: list[tuple[str, FileRef]] = []
+    size_mismatch: list[tuple[str, FileRef, int]] = []
+    hash_mismatch: list[tuple[str, FileRef, str]] = []
+    for version_id, ref in refs:
+        path = object_path(cas_dir, ref.cas_hash)
+        if not path.exists():
+            missing.append((version_id, ref))
+            continue
+        actual_size = path.stat().st_size
+        if actual_size != ref.size:
+            size_mismatch.append((version_id, ref, actual_size))
+            continue
+        actual_hash = sha256_file(path)
+        if actual_hash != ref.cas_hash:
+            hash_mismatch.append((version_id, ref, actual_hash))
+    return missing, size_mismatch, hash_mismatch
+
+
+def _print_integrity_failures(
+    missing: list[tuple[str, FileRef]],
+    size_mismatch: list[tuple[str, FileRef, int]],
+    hash_mismatch: list[tuple[str, FileRef, str]],
+    include_version: bool,
+) -> None:
+    for version_id, ref in missing:
+        context = f"{version_id} " if include_version else ""
+        click.echo(
+            f"missing {context}{ref.role} {ref.path} {_short_hash(ref.cas_hash)}"
+        )
+    for version_id, ref, actual_size in size_mismatch:
+        context = f"{version_id} " if include_version else ""
+        click.echo(
+            f"size_mismatch {context}{ref.role} {ref.path} "
+            f"{ref.size}->{actual_size} {_short_hash(ref.cas_hash)}"
+        )
+    for version_id, ref, actual_hash in hash_mismatch:
+        context = f"{version_id} " if include_version else ""
+        click.echo(
+            f"hash_mismatch {context}{ref.role} {ref.path} "
+            f"{_short_hash(ref.cas_hash)}->{_short_hash(actual_hash)}"
+        )
 
 
 @main.command("status")
@@ -1130,22 +1211,10 @@ def verify_cmd(version: str, show_full: bool) -> None:
         raise click.ClickException(f"Version not found or ambiguous: {version}")
 
     refs = metadata.get_file_refs(record.id)
-    missing: list[FileRef] = []
-    size_mismatch: list[tuple[FileRef, int]] = []
-    hash_mismatch: list[tuple[FileRef, str]] = []
-    for ref in refs:
-        path = object_path(config.cas_dir, ref.cas_hash)
-        if not path.exists():
-            missing.append(ref)
-            continue
-        actual_size = path.stat().st_size
-        if actual_size != ref.size:
-            size_mismatch.append((ref, actual_size))
-            continue
-        actual_hash = sha256_file(path)
-        if actual_hash != ref.cas_hash:
-            hash_mismatch.append((ref, actual_hash))
-
+    missing, size_mismatch, hash_mismatch = _verify_file_refs(
+        config.cas_dir,
+        [(record.id, ref) for ref in refs],
+    )
     failures = len(missing) + len(size_mismatch) + len(hash_mismatch)
     click.echo(f"version: {record.id}")
     click.echo(f"files: {len(refs)}")
@@ -1155,18 +1224,12 @@ def verify_cmd(version: str, show_full: bool) -> None:
     click.echo(f"integrity: {'ok' if failures == 0 else 'failed'}")
 
     if show_full and failures:
-        for ref in missing:
-            click.echo(f"missing {ref.role} {ref.path} {_short_hash(ref.cas_hash)}")
-        for ref, actual_size in size_mismatch:
-            click.echo(
-                f"size_mismatch {ref.role} {ref.path} "
-                f"{ref.size}->{actual_size} {_short_hash(ref.cas_hash)}"
-            )
-        for ref, actual_hash in hash_mismatch:
-            click.echo(
-                f"hash_mismatch {ref.role} {ref.path} "
-                f"{_short_hash(ref.cas_hash)}->{_short_hash(actual_hash)}"
-            )
+        _print_integrity_failures(
+            missing,
+            size_mismatch,
+            hash_mismatch,
+            include_version=False,
+        )
 
     if failures:
         raise click.ClickException("CAS integrity verification failed")
