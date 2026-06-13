@@ -130,6 +130,21 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert from_v1_before_create.exit_code != 0
         assert "Branch/ref not found: from-v1" in from_v1_before_create.output
 
+        checkout_from_version_print_plan = runner.invoke(
+            main,
+            [
+                "checkout",
+                first_version.group(1),
+                "--new-branch",
+                "from-v1",
+                "--plan",
+                "--print-path",
+            ],
+        )
+        assert checkout_from_version_print_plan.exit_code == 0
+        assert checkout_from_version_print_plan.output.strip() == str(from_v1_target)
+        assert not from_v1_target.exists()
+
         checkout_from_version = runner.invoke(
             main,
             ["checkout", first_version.group(1), "--new-branch", "from-v1"],
@@ -199,6 +214,13 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert f"target_path: {expected_target}" in checkout_plan.output
         assert not expected_target.exists()
 
+        checkout_print_plan = runner.invoke(
+            main, ["checkout", "feature/place", "--plan", "--print-path"]
+        )
+        assert checkout_print_plan.exit_code == 0
+        assert checkout_print_plan.output.strip() == str(expected_target)
+        assert not expected_target.exists()
+
         checkout = runner.invoke(main, ["checkout", "feature/place"])
         assert checkout.exit_code == 0, checkout.output
         assert "branch: feature/place" in checkout.output
@@ -225,6 +247,13 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         checkout_again = runner.invoke(main, ["checkout", "feature/place"])
         assert checkout_again.exit_code == 0, checkout_again.output
         assert "materialization: reused" in checkout_again.output
+
+        checkout_print_path = runner.invoke(
+            main, ["checkout", "feature/place", "--print-path"]
+        )
+        assert checkout_print_path.exit_code == 0
+        assert checkout_print_path.output.strip() == str(expected_target)
+        assert "branch:" not in checkout_print_path.output
 
         os.chdir(expected_target)
         checkout_status = runner.invoke(main, ["status"])

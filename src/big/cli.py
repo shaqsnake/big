@@ -569,7 +569,17 @@ def repo_init(
     is_flag=True,
     help="Resolve branch and target path only; do not materialize files.",
 )
-def checkout_cmd(target_ref: str, new_branch: str | None, plan: bool) -> None:
+@click.option(
+    "--print-path",
+    is_flag=True,
+    help="Print only the target path. Combine with --plan for no side effects.",
+)
+def checkout_cmd(
+    target_ref: str,
+    new_branch: str | None,
+    plan: bool,
+    print_path: bool,
+) -> None:
     """Checkout a branch into a user-private materialized directory."""
     config, metadata = _repo_from_cwd()
     try:
@@ -612,6 +622,10 @@ def checkout_cmd(target_ref: str, new_branch: str | None, plan: bool) -> None:
     if target_path == workspace_context.workspace_path:
         raise click.ClickException("Checkout target path matches source workspace")
 
+    if print_path and plan:
+        click.echo(target_path)
+        return
+
     refs = _dedupe_checkout_refs(metadata.get_file_refs(version.id))
     total_bytes = sum(ref.size for ref in refs)
     materialization = "plan-only"
@@ -637,6 +651,10 @@ def checkout_cmd(target_ref: str, new_branch: str | None, plan: bool) -> None:
                 )
             except ValueError as exc:
                 raise click.ClickException(str(exc)) from exc
+
+    if print_path:
+        click.echo(target_path)
+        return
 
     click.echo(f"branch: {branch_name}")
     click.echo(f"version: {version.id}")

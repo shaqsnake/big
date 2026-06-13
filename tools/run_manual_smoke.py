@@ -134,6 +134,16 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     if target_path.exists():
         raise SystemExit(f"Plan-only checkout unexpectedly created: {target_path}")
 
+    checkout_print_plan = _run_big(
+        ["checkout", "feature/place", "--plan", "--print-path"],
+        alice_workspace,
+        env,
+    )
+    if checkout_print_plan.strip() != str(target_path):
+        raise SystemExit("Checkout --print-path plan output did not match target path")
+    if target_path.exists():
+        raise SystemExit(f"Print-path plan unexpectedly created: {target_path}")
+
     checkout = _run_big(["checkout", "feature/place"], alice_workspace, env)
     _expect_contains(checkout, "materialization: copied")
     _expect_contains(checkout, "files: 5")
@@ -151,6 +161,14 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
 
     checkout_log = _run_big(["log"], target_path, env)
     _expect_contains(checkout_log, alice_version)
+
+    checkout_print_path = _run_big(
+        ["checkout", "feature/place", "--print-path"],
+        alice_workspace,
+        env,
+    )
+    if checkout_print_path.strip() != str(target_path):
+        raise SystemExit("Checkout --print-path output did not match materialized path")
 
     historical_plan = _run_big(
         ["checkout", alice_version, "--new-branch", "from-v1", "--plan"],

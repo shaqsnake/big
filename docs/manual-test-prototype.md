@@ -362,6 +362,19 @@ big status
 - 新 branch `from-v1` 的 head 指向 `<version>`
 - 进入目标目录后执行 `big status`，会显示 `default_ref: from-v1`
 
+脚本或非交互流程只需要路径时，可以使用 `--print-path`：
+
+```bash
+big checkout feature/place --plan --print-path
+big checkout feature/place --print-path
+```
+
+期望：
+
+- `--plan --print-path` 只打印目标路径，不创建目录
+- 不带 `--plan` 的 `--print-path` 会照常物化或复用目录，但只打印目标路径
+- 输出不包含 `branch:`、`target_path:` 等人类摘要字段，适合被 shell 脚本捕获
+
 可选：在 Bash 或 Zsh 中启用 checkout 自动切目录：
 
 ```bash
@@ -393,6 +406,7 @@ pwd
 - `big reset`
 - `big checkout <branch>`
 - `big checkout <branch> --plan`
+- `big checkout <branch> --print-path`
 - `big checkout <version> --new-branch <branch>`
 - `big shell-init bash|zsh`
 - `big branch create`
