@@ -305,6 +305,23 @@ big branch show workspace/default/alice/APR
 
 此时会额外显示 workspace-private ref。
 
+### 用例 7：解析 checkout 目标路径
+
+当前原型先支持 plan-only checkout，用于确认目标 branch、head version 和稳定目录路径；它不会复制文件，也不会创建目标目录。
+
+```bash
+big checkout feature/place --plan
+```
+
+期望：
+
+- 输出 `branch: feature/place`
+- 输出 `version: <feature/place-head-version>`
+- 输出 `materialization: plan-only`
+- 输出 `target_path: .../user/alice/.big-checkouts/APR/feature__place/<version>`
+- 输出可复制执行的 `cd: cd -- <target-path>`
+- 目标目录尚不会被创建，后续 copy-only 物化会在单独切片实现。
+
 ## 当前原型范围
 
 已实现：
@@ -319,6 +336,7 @@ big branch show workspace/default/alice/APR
 - `big verify`
 - `big diff`
 - `big reset`
+- `big checkout <branch> --plan`
 - `big branch create`
 - `big branch list`
 - `big branch show`

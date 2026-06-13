@@ -118,6 +118,30 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "kind: workspace" in workspace_ref_show.output
         assert f"head: {first_version.group(1)}" in workspace_ref_show.output
 
+        checkout_plan = runner.invoke(
+            main, ["checkout", "feature/place", "--plan"]
+        )
+        assert checkout_plan.exit_code == 0, checkout_plan.output
+        assert "branch: feature/place" in checkout_plan.output
+        assert f"version: {first_version.group(1)}" in checkout_plan.output
+        assert "materialization: plan-only" in checkout_plan.output
+        assert ".big-checkouts" in checkout_plan.output
+        assert "feature__place" in checkout_plan.output
+        assert f"/{first_version.group(1)}" in checkout_plan.output.replace("\\", "/")
+        expected_target = (
+            workspace.parent
+            / ".big-checkouts"
+            / "APR"
+            / "feature__place"
+            / first_version.group(1)
+        )
+        assert f"target_path: {expected_target}" in checkout_plan.output
+        assert not expected_target.exists()
+
+        checkout_without_plan = runner.invoke(main, ["checkout", "feature/place"])
+        assert checkout_without_plan.exit_code != 0
+        assert "rerun with --plan" in checkout_without_plan.output
+
         branch_list = runner.invoke(main, ["branch", "list"])
         assert branch_list.exit_code == 0, branch_list.output
         assert f"named feature/place {first_version.group(1)}" in branch_list.output

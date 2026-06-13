@@ -26,6 +26,7 @@ from .config import (
     find_config,
     resolve_work_root,
     resolve_workspace_context,
+    WorkspaceContext,
     WorkRoot,
     write_main_config,
     write_pointer_config,
@@ -199,6 +200,26 @@ def _is_ancestor_version(
     return False
 
 
+def _safe_path_token(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]+", "__", value).strip("._-") or "unnamed"
+
+
+def _checkout_target_path(
+    workspace_context: WorkspaceContext,
+    branch_name: str,
+    version_id: str,
+) -> Path:
+    return (
+        workspace_context.work_root.path
+        / "user"
+        / workspace_context.user
+        / ".big-checkouts"
+        / workspace_context.flow
+        / _safe_path_token(branch_name)
+        / version_id
+    )
+
+
 def _parse_work_root(value: str) -> WorkRoot:
     if "=" not in value:
         raise click.BadParameter("Expected id=path")
@@ -313,6 +334,53 @@ def repo_init(
     click.echo(f"home: {config.home}")
     click.echo(f"metadata: {config.metadata_db}")
     click.echo(f"work_roots: {len(config.work_roots)}")
+
+
+@main.command("checkout")
+@click.argument("branch_name")
+@click.option(
+    "--plan",
+    is_flag=True,
+    help="Resolve branch and target path only; do not materialize files.",
+)
+def checkout_cmd(branch_name: str, plan: bool) -> None:
+    """Resolve a branch checkout target without changing the source workspace."""
+    if not plan:
+        raise click.ClickException(
+            "Materializing checkout is not implemented yet; rerun with --plan"
+        )
+
+    config, metadata = _repo_from_cwd()
+    try:
+        workspace_context = resolve_workspace_context(config, Path.cwd())
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    branch_record = metadata.get_branch(branch_name)
+    if branch_record is None:
+        raise click.ClickException(f"Branch/ref not found: {branch_name}")
+    if branch_record.head_version_id is None:
+        raise click.ClickException(f"Branch/ref has no head version: {branch_name}")
+    version = metadata.get_version(branch_record.head_version_id)
+    if version is None:
+        raise click.ClickException(
+            f"Head version not found: {branch_record.head_version_id}"
+        )
+
+    target_path = _checkout_target_path(
+        workspace_context,
+        branch_name=branch_record.name,
+        version_id=version.id,
+    )
+    if target_path == workspace_context.workspace_path:
+        raise click.ClickException("Checkout target path matches source workspace")
+
+    click.echo(f"branch: {branch_record.name}")
+    click.echo(f"version: {version.id}")
+    click.echo(f"source_workspace: {workspace_context.workspace_path}")
+    click.echo(f"target_path: {target_path}")
+    click.echo("materialization: plan-only")
+    click.echo(f"cd: cd -- {target_path}")
 
 
 @repo.command("stats")
