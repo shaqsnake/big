@@ -118,6 +118,7 @@ find manual-lab/data/WslChip/.big/cas/objects -type f -perm /222 -print
 big status
 big log
 big show <version> --full
+big verify <version>
 ```
 
 期望：
@@ -125,6 +126,7 @@ big show <version> --full
 - `big status` 显示当前 workspace 的 `head` 等于刚才提交的 version ID
 - `big log` 显示刚才的 version ID
 - `big show --full` 展示 inputs、outputs、SHA-256 摘要和状态 `[Exploring/resident]`
+- `big verify <version>` 输出 `integrity: ok`，表示该 version manifest 引用的 CAS 对象存在、大小一致且 SHA-256 校验通过。
 
 ### 用例 3：修改后再次提交并 diff
 
@@ -275,6 +277,7 @@ big branch show workspace/default/alice/APR
 - `big commit`
 - `big log`
 - `big show`
+- `big verify`
 - `big diff`
 - `big reset`
 - `big branch create`

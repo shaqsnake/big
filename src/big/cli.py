@@ -13,7 +13,13 @@ import uuid
 
 import click
 
-from .cas import publish_object, stable_copy_to_staging, UnstableFileError
+from .cas import (
+    object_path,
+    publish_object,
+    sha256_file,
+    stable_copy_to_staging,
+    UnstableFileError,
+)
 from .config import (
     CONFIG_NAME,
     ensure_repo_dirs,
@@ -610,6 +616,59 @@ def show_cmd(version: str, verbose: bool, show_full: bool) -> None:
                 )
             if not show_full and len(items) > len(visible):
                 click.echo(f"  ... {len(items) - len(visible)} more; use --full")
+
+
+@main.command("verify")
+@click.argument("version")
+@click.option("--full", "show_full", is_flag=True, help="Show every failed FileRef.")
+def verify_cmd(version: str, show_full: bool) -> None:
+    """Verify that a version's referenced CAS objects are present and intact."""
+    config, metadata = _repo_from_cwd()
+    record = metadata.get_version(version)
+    if record is None:
+        raise click.ClickException(f"Version not found or ambiguous: {version}")
+
+    refs = metadata.get_file_refs(record.id)
+    missing: list[FileRef] = []
+    size_mismatch: list[tuple[FileRef, int]] = []
+    hash_mismatch: list[tuple[FileRef, str]] = []
+    for ref in refs:
+        path = object_path(config.cas_dir, ref.cas_hash)
+        if not path.exists():
+            missing.append(ref)
+            continue
+        actual_size = path.stat().st_size
+        if actual_size != ref.size:
+            size_mismatch.append((ref, actual_size))
+            continue
+        actual_hash = sha256_file(path)
+        if actual_hash != ref.cas_hash:
+            hash_mismatch.append((ref, actual_hash))
+
+    failures = len(missing) + len(size_mismatch) + len(hash_mismatch)
+    click.echo(f"version: {record.id}")
+    click.echo(f"files: {len(refs)}")
+    click.echo(f"missing: {len(missing)}")
+    click.echo(f"size_mismatch: {len(size_mismatch)}")
+    click.echo(f"hash_mismatch: {len(hash_mismatch)}")
+    click.echo(f"integrity: {'ok' if failures == 0 else 'failed'}")
+
+    if show_full and failures:
+        for ref in missing:
+            click.echo(f"missing {ref.role} {ref.path} {_short_hash(ref.cas_hash)}")
+        for ref, actual_size in size_mismatch:
+            click.echo(
+                f"size_mismatch {ref.role} {ref.path} "
+                f"{ref.size}->{actual_size} {_short_hash(ref.cas_hash)}"
+            )
+        for ref, actual_hash in hash_mismatch:
+            click.echo(
+                f"hash_mismatch {ref.role} {ref.path} "
+                f"{_short_hash(ref.cas_hash)}->{_short_hash(actual_hash)}"
+            )
+
+    if failures:
+        raise click.ClickException("CAS integrity verification failed")
 
 
 @main.command("diff")

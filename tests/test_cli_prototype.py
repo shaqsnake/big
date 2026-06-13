@@ -6,6 +6,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from big.cas import object_path
 from big.cli import main
 from big.config import find_config
 from big.metadata import SQLiteMetadataRepository
@@ -137,6 +138,12 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "outputs: 2" in show.output
         assert "workspace: user/alice/APR" in show.output
         assert "inputs/top.v" in show.output
+
+        verify = runner.invoke(main, ["verify", first_version.group(1)])
+        assert verify.exit_code == 0, verify.output
+        assert f"version: {first_version.group(1)}" in verify.output
+        assert "files: 4" in verify.output
+        assert "integrity: ok" in verify.output
 
         _write(workspace / "inputs" / "top.v", "module top; wire a; endmodule\n")
         _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\nCOMPONENTS 1 ;\n")
@@ -349,5 +356,51 @@ def test_branch_show_rejects_unknown_ref(tmp_path: Path) -> None:
         result = runner.invoke(main, ["branch", "show", "feature/missing"])
         assert result.exit_code != 0
         assert "Branch/ref not found: feature/missing" in result.output
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_verify_reports_missing_cas_object(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+            ],
+        )
+        assert commit.exit_code == 0, commit.output
+        version = re.search(r"version: (v[0-9a-f]+)", commit.output)
+        assert version
+
+        config, _ = find_config(workspace)
+        metadata = SQLiteMetadataRepository(config.metadata_db)
+        refs = metadata.get_file_refs(version.group(1))
+        missing_object = object_path(config.cas_dir, refs[0].cas_hash)
+        missing_object.chmod(0o666)
+        missing_object.unlink()
+
+        verify = runner.invoke(main, ["verify", version.group(1), "--full"])
+        assert verify.exit_code != 0
+        assert "integrity: failed" in verify.output
+        assert "missing: 1" in verify.output
+        assert "missing " in verify.output
+        assert "CAS integrity verification failed" in verify.output
     finally:
         os.chdir(old_cwd)
