@@ -560,6 +560,145 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         os.chdir(old_cwd)
 
 
+def test_checkout_include_exclude_materializes_file_subset(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "scripts" / "place.tcl", "place_design\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    _write(workspace / "reports" / "place.rpt", "wns 0.01\n")
+    _write(workspace / "reports" / "timing.rpt", "tns 0.00\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**;scripts/**",
+                "--outputs",
+                "outputs/**;reports/**",
+                "--message",
+                "partial checkout source",
+            ],
+        )
+        assert commit.exit_code == 0, commit.output
+        version = re.search(r"version: (v[0-9a-f]+)", commit.output)
+        assert version
+
+        branch = runner.invoke(main, ["branch", "create", "feature/partial"])
+        assert branch.exit_code == 0, branch.output
+
+        plan = runner.invoke(
+            main,
+            [
+                "checkout",
+                "feature/partial",
+                "--include",
+                "inputs/**;reports/*.rpt",
+                "--exclude",
+                "reports/place.rpt",
+                "--plan",
+                "--full",
+            ],
+        )
+        assert plan.exit_code == 0, plan.output
+        assert "checkout_scope: partial" in plan.output
+        assert "selection: explicit" in plan.output
+        assert "include_patterns: inputs/**;reports/*.rpt" in plan.output
+        assert "exclude_patterns: reports/place.rpt" in plan.output
+        assert "excluded_files: 1" in plan.output
+        assert "omitted_files: 3" in plan.output
+        assert "files: 2" in plan.output
+        assert "materialization: plan-only" in plan.output
+        assert "selected_files:" in plan.output
+        assert "  input inputs/top.v " in plan.output
+        assert "  output reports/timing.rpt " in plan.output
+        assert "reports/place.rpt" not in plan.output.split("selected_files:", 1)[1]
+        target_match = re.search(r"target_path: (.+)", plan.output)
+        assert target_match
+        target_path = Path(target_match.group(1))
+        assert "__partial__" in target_path.name
+        assert not target_path.exists()
+
+        print_path = runner.invoke(
+            main,
+            [
+                "checkout",
+                "feature/partial",
+                "--include",
+                "inputs/**;reports/*.rpt",
+                "--exclude",
+                "reports/place.rpt",
+                "--plan",
+                "--print-path",
+            ],
+        )
+        assert print_path.exit_code == 0, print_path.output
+        assert print_path.output.strip() == str(target_path)
+
+        checkout = runner.invoke(
+            main,
+            [
+                "checkout",
+                "feature/partial",
+                "--include",
+                "inputs/**;reports/*.rpt",
+                "--exclude",
+                "reports/place.rpt",
+            ],
+        )
+        assert checkout.exit_code == 0, checkout.output
+        assert "materialization: partial" in checkout.output
+        assert (target_path / "inputs" / "top.v").exists()
+        assert (target_path / "reports" / "timing.rpt").exists()
+        assert not (target_path / "reports" / "place.rpt").exists()
+        assert not (target_path / "scripts" / "place.tcl").exists()
+        assert not (target_path / "outputs" / "top.def").exists()
+
+        marker = json.loads(
+            (target_path / ".big-checkout.json").read_text(encoding="utf-8")
+        )
+        assert marker["materialization"] == "partial"
+        assert marker["selection_profile"]["include"] == [
+            "inputs/**",
+            "reports/*.rpt",
+        ]
+        assert marker["selection_profile"]["exclude"] == ["reports/place.rpt"]
+        assert marker["selection_profile"]["selected_files"] == 2
+
+        checkout_again = runner.invoke(
+            main,
+            [
+                "checkout",
+                "feature/partial",
+                "--include",
+                "inputs/**;reports/*.rpt",
+                "--exclude",
+                "reports/place.rpt",
+            ],
+        )
+        assert checkout_again.exit_code == 0, checkout_again.output
+        assert "materialization: reused" in checkout_again.output
+
+        missing = runner.invoke(
+            main,
+            ["checkout", "feature/partial", "--include", "missing/**", "--plan"],
+        )
+        assert missing.exit_code != 0
+        assert "No checkout files matched include pattern(s): missing/**" in missing.output
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_commit_rejects_missing_inputs(tmp_path: Path) -> None:
     runner = CliRunner()
     repo_root = tmp_path / "data" / "DemoChip"

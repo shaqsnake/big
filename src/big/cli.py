@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
+import fnmatch
 import getpass
 import glob
 import hashlib
@@ -303,7 +304,11 @@ def _checkout_target_path(
     workspace_context: WorkspaceContext,
     branch_name: str,
     version_id: str,
+    selection_token: str = "",
 ) -> Path:
+    version_component = (
+        version_id if not selection_token else f"{version_id}__{selection_token}"
+    )
     return (
         workspace_context.work_root.path
         / "user"
@@ -311,8 +316,105 @@ def _checkout_target_path(
         / ".big-checkouts"
         / workspace_context.flow
         / _safe_path_token(branch_name)
-        / version_id
+        / version_component
     )
+
+
+def _normalize_manifest_pattern(pattern: str) -> str:
+    value = pattern.replace("\\", "/").strip()
+    while value.startswith("./"):
+        value = value[2:]
+    return value.strip("/")
+
+
+def _pattern_has_glob(pattern: str) -> bool:
+    return any(item in pattern for item in "*?[")
+
+
+def _manifest_path_matches(pattern: str, rel_path: str) -> bool:
+    normalized = _normalize_manifest_pattern(pattern)
+    if not normalized:
+        return False
+    rel_path = rel_path.replace("\\", "/")
+    if _pattern_has_glob(normalized):
+        return fnmatch.fnmatchcase(rel_path, normalized)
+    return rel_path == normalized or rel_path.startswith(normalized.rstrip("/") + "/")
+
+
+def _selection_profile_hash(
+    include_patterns: list[str],
+    exclude_patterns: list[str],
+) -> str:
+    return _short_hash(
+        _json_hash(
+            {
+                "schema": 1,
+                "include": include_patterns,
+                "exclude": exclude_patterns,
+            }
+        )
+    )
+
+
+def _select_checkout_refs(
+    refs: list[FileRef],
+    include_patterns: tuple[str, ...],
+    exclude_patterns: tuple[str, ...],
+) -> tuple[list[FileRef], dict[str, object]]:
+    includes = [
+        _normalize_manifest_pattern(pattern)
+        for pattern in _expand_pattern_args(include_patterns)
+    ]
+    excludes = [
+        _normalize_manifest_pattern(pattern)
+        for pattern in _expand_pattern_args(exclude_patterns)
+    ]
+    includes = [pattern for pattern in includes if pattern]
+    excludes = [pattern for pattern in excludes if pattern]
+
+    if not includes and not excludes:
+        return refs, {}
+
+    base_refs = refs
+    unmatched_includes: list[str] = []
+    if includes:
+        selected_by_path: dict[str, FileRef] = {}
+        for pattern in includes:
+            matches = [ref for ref in refs if _manifest_path_matches(pattern, ref.path)]
+            if not matches:
+                unmatched_includes.append(pattern)
+            for ref in matches:
+                selected_by_path[ref.path] = ref
+        if unmatched_includes:
+            raise click.ClickException(
+                "No checkout files matched include pattern(s): "
+                + ", ".join(unmatched_includes)
+            )
+        base_refs = [selected_by_path[path] for path in sorted(selected_by_path)]
+
+    excluded_paths: set[str] = set()
+    if excludes:
+        for pattern in excludes:
+            excluded_paths.update(
+                ref.path for ref in base_refs if _manifest_path_matches(pattern, ref.path)
+            )
+
+    selected = [ref for ref in base_refs if ref.path not in excluded_paths]
+    if not selected:
+        raise click.ClickException("Checkout selection is empty after include/exclude rules")
+
+    selection_hash = _selection_profile_hash(includes, excludes)
+    profile = {
+        "schema": 1,
+        "type": "explicit",
+        "include": includes,
+        "exclude": excludes,
+        "selection_hash": selection_hash,
+        "excluded_files": len(excluded_paths),
+        "selected_files": len(selected),
+        "bytes": sum(ref.size for ref in selected),
+    }
+    return selected, profile
 
 
 def _dedupe_checkout_refs(refs: list[FileRef]) -> list[FileRef]:
@@ -342,6 +444,7 @@ def _checkout_marker_matches(
     branch_name: str,
     version_id: str,
     materialization_kind: str,
+    selection_hash: str = "",
 ) -> bool:
     marker_path = target_path / ".big-checkout.json"
     if not marker_path.exists():
@@ -350,13 +453,18 @@ def _checkout_marker_matches(
         marker = json.loads(marker_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    return (
+    if not (
         marker.get("schema") == 1
         and marker.get("repo_id") == repo_id
         and marker.get("branch") == branch_name
         and marker.get("version") == version_id
         and marker.get("materialization") == materialization_kind
-    )
+    ):
+        return False
+    if selection_hash:
+        profile = marker.get("selection_profile", {})
+        return isinstance(profile, dict) and profile.get("selection_hash") == selection_hash
+    return "selection_profile" not in marker
 
 
 def _copy_checkout_refs(cas_root: Path, refs: list[FileRef], target_root: Path) -> None:
@@ -395,6 +503,7 @@ def _materialize_checkout(
     refs: list[FileRef],
     materialization_kind: str,
     omitted_outputs: int = 0,
+    selection_profile: dict[str, object] | None = None,
 ) -> str:
     if target_path.exists():
         if not target_path.is_dir():
@@ -407,6 +516,7 @@ def _materialize_checkout(
             branch_name=branch_name,
             version_id=version_id,
             materialization_kind=materialization_kind,
+            selection_hash=str((selection_profile or {}).get("selection_hash", "")),
         ):
             return "reused"
         raise click.ClickException(
@@ -432,6 +542,8 @@ def _materialize_checkout(
         "omitted_outputs": omitted_outputs,
         "created_at": _utc_now(),
     }
+    if selection_profile:
+        marker["selection_profile"] = selection_profile
 
     try:
         temp_path.mkdir()
@@ -956,11 +1068,27 @@ def repo_init(
     is_flag=True,
     help="Print only the target path. Combine with --plan for no side effects.",
 )
+@click.option(
+    "--include",
+    "include_patterns",
+    multiple=True,
+    help="Manifest path or glob to materialize. Repeat or separate with semicolons.",
+)
+@click.option(
+    "--exclude",
+    "exclude_patterns",
+    multiple=True,
+    help="Manifest path or glob to remove from the selected checkout set.",
+)
+@click.option("--full", "show_full", is_flag=True, help="Show selected file refs.")
 def checkout_cmd(
     target_ref: str,
     new_branch: str | None,
     plan: bool,
     print_path: bool,
+    include_patterns: tuple[str, ...],
+    exclude_patterns: tuple[str, ...],
+    show_full: bool,
 ) -> None:
     """Checkout a branch into a user-private materialized directory."""
     config, metadata = _repo_from_cwd()
@@ -996,10 +1124,37 @@ def checkout_cmd(
             )
         branch_name = branch_record.name
 
+    all_refs = _dedupe_checkout_refs(metadata.get_file_refs(version.id))
+    refs = all_refs
+    checkout_scope = "full"
+    materialization_kind = "copy"
+    omitted_outputs = 0
+    omitted_files = 0
+    selection_profile: dict[str, object] = {}
+    explicit_selection = bool(
+        _expand_pattern_args(include_patterns) or _expand_pattern_args(exclude_patterns)
+    )
+    if version.retention_state == "recipe_only":
+        refs = [ref for ref in all_refs if ref.role == "input"]
+        omitted_outputs = sum(1 for ref in all_refs if ref.role == "output")
+        checkout_scope = "inputs-only"
+        materialization_kind = "partial"
+    if explicit_selection:
+        refs, selection_profile = _select_checkout_refs(
+            refs,
+            include_patterns=include_patterns,
+            exclude_patterns=exclude_patterns,
+        )
+        checkout_scope = "partial"
+        materialization_kind = "partial"
+        omitted_files = len(all_refs) - len(refs)
+    selection_hash = str(selection_profile.get("selection_hash", ""))
+    selection_token = f"partial__{selection_hash}" if explicit_selection else ""
     target_path = _checkout_target_path(
         workspace_context,
         branch_name=branch_name,
         version_id=version.id,
+        selection_token=selection_token,
     )
     if target_path == workspace_context.workspace_path:
         raise click.ClickException("Checkout target path matches source workspace")
@@ -1008,16 +1163,6 @@ def checkout_cmd(
         click.echo(target_path)
         return
 
-    all_refs = _dedupe_checkout_refs(metadata.get_file_refs(version.id))
-    refs = all_refs
-    checkout_scope = "full"
-    materialization_kind = "copy"
-    omitted_outputs = 0
-    if version.retention_state == "recipe_only":
-        refs = [ref for ref in all_refs if ref.role == "input"]
-        omitted_outputs = sum(1 for ref in all_refs if ref.role == "output")
-        checkout_scope = "inputs-only"
-        materialization_kind = "partial"
     total_bytes = sum(ref.size for ref in refs)
     materialization = "plan-only"
     if not plan:
@@ -1030,6 +1175,7 @@ def checkout_cmd(
             refs=refs,
             materialization_kind=materialization_kind,
             omitted_outputs=omitted_outputs,
+            selection_profile=selection_profile or None,
         )
         if new_branch is not None:
             try:
@@ -1060,8 +1206,25 @@ def checkout_cmd(
     click.echo(f"checkout_scope: {checkout_scope}")
     if omitted_outputs:
         click.echo(f"omitted_outputs: {omitted_outputs}")
+    if selection_profile:
+        click.echo("selection: explicit")
+        click.echo(f"selection_hash: {selection_hash}")
+        click.echo(
+            "include_patterns: "
+            + (";".join(selection_profile["include"]) or "-")
+        )
+        click.echo(
+            "exclude_patterns: "
+            + (";".join(selection_profile["exclude"]) or "-")
+        )
+        click.echo(f"excluded_files: {selection_profile['excluded_files']}")
+        click.echo(f"omitted_files: {omitted_files}")
     click.echo(f"files: {len(refs)}")
     click.echo(f"bytes: {total_bytes}")
+    if show_full:
+        click.echo("selected_files:")
+        for ref in refs:
+            click.echo(f"  {ref.role} {ref.path} {ref.size} {_short_hash(ref.cas_hash)}")
     click.echo(f"materialization: {materialization}")
     click.echo(f"cd: cd -- {target_path}")
 

@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、验证 `big run` 受管 lease 创建与释放、alice 提交、显式 `restore --in-place` 回到旧版本、restore 后继续 commit 并记录 provenance、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、验证 `big run` 受管 lease 创建与释放、alice 提交、显式 `restore --in-place` 回到旧版本、restore 后继续 commit 并记录 provenance、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证显式部分 checkout、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
@@ -507,6 +507,32 @@ big checkout feature/place
 - 原始 workspace 不会被修改；未启用 shell 集成时，如果要进入 checkout 目录，需要手工执行输出中的 `cd -- <target-path>`
 - 进入目标目录后执行 `big status`，会显示 `default_ref: feature/place`，而不是误识别为 `.big-checkouts` workspace
 
+显式只物化部分文件：
+
+```bash
+big checkout feature/place \
+  --include 'inputs/**;reports/*.rpt' \
+  --exclude 'reports/place.rpt' \
+  --plan \
+  --full
+
+big checkout feature/place \
+  --include 'inputs/**;reports/*.rpt' \
+  --exclude 'reports/place.rpt'
+```
+
+期望：
+
+- 输出 `checkout_scope: partial`
+- 输出 `selection: explicit` 和 `selection_hash: ...`
+- 输出 `include_patterns`、`exclude_patterns`、`excluded_files`、`omitted_files`
+- 输出 `target_path: .../<version>__partial__<selection-hash>`
+- `--full` 展示本次选中的 FileRef 列表
+- 不带 `--plan` 时输出 `materialization: partial`
+- 目标目录只包含选中的 manifest 文件；未选中或被 exclude 的文件不会被复制
+- `.big-checkout.json` 中的 `materialization` 为 `partial`，并记录 `selection_profile`
+- 重新执行同一组 include/exclude 时输出 `materialization: reused`
+
 再次执行同一命令：
 
 ```bash
@@ -585,6 +611,7 @@ pwd
 - `big checkout <branch>`
 - `big checkout <branch> --plan`
 - `big checkout <branch> --print-path`
+- `big checkout <branch> --include <path-or-glob> [--exclude <path-or-glob>]`
 - `big checkout <version> --new-branch <branch>`
 - `big shell-init bash|zsh`
 - `big branch create`

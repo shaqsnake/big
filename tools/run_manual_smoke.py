@@ -277,6 +277,31 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     if not (target_path / ".big-checkout.json").exists():
         raise SystemExit(f"Checkout marker is missing: {target_path}")
 
+    partial_checkout = _run_big(
+        [
+            "checkout",
+            "feature/place",
+            "--include",
+            "inputs/**;reports/*.rpt",
+            "--exclude",
+            "reports/place.rpt",
+        ],
+        alice_workspace,
+        env,
+    )
+    _expect_contains(partial_checkout, "checkout_scope: partial")
+    _expect_contains(partial_checkout, "selection: explicit")
+    _expect_contains(partial_checkout, "excluded_files: 1")
+    _expect_contains(partial_checkout, "files: 2")
+    _expect_contains(partial_checkout, "materialization: partial")
+    partial_target = Path(_value_from(partial_checkout, "target_path"))
+    if not (partial_target / "inputs" / "top.v").exists():
+        raise SystemExit("Partial checkout did not materialize selected input")
+    if (partial_target / "reports" / "place.rpt").exists():
+        raise SystemExit("Partial checkout materialized an excluded report")
+    if (partial_target / "outputs" / "top_placed.def").exists():
+        raise SystemExit("Partial checkout materialized an unselected output")
+
     checkout_status = _run_big(["status"], target_path, env)
     _expect_contains(checkout_status, "default_ref: feature/place")
     _expect_contains(checkout_status, "workspace: checkout/default/alice/APR/feature/place@")
