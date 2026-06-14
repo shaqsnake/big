@@ -19,7 +19,7 @@ context:
 ## Boundaries
 
 - 本切片不移动 branch head，不修改工作目录，不写 CAS，不回收对象。
-- 本切片只做 review_state 晋升；不实现 retention_state 降级、GC、归档或 recipe_only checkout 降级物化。
+- 本切片只做 review_state 晋升；retention_state 降级和 recipe_only checkout 投影由 `spec-prototype-recipe-only-checkout.md` 单独覆盖，仍不实现 GC 或归档。
 - Candidate 晋升不会触发事务 outbox、delivery staging 或统一发布目录；命令输出 `candidate_outbox: not-implemented` 明确该边界。
 - 原型尚未接入 Linux groups/ACL，因此不做 PD Lead 权限校验。
 - `lifecycle_events` 是最小状态事件记录，不等同于最终 NFR8 要求的服务端 append-only hash-chain 审计日志。

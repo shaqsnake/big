@@ -633,6 +633,140 @@ def test_audit_verify_detects_tampered_event(tmp_path: Path) -> None:
         os.chdir(old_cwd)
 
 
+def test_recipe_only_checkout_materializes_inputs_only(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "scripts" / "place.tcl", "place_design\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    _write(workspace / "reports" / "place.rpt", "wns 0.01\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**;scripts/**",
+                "--outputs",
+                "outputs/**;reports/**",
+                "--message",
+                "recipe-only snapshot",
+            ],
+        )
+        assert commit.exit_code == 0, commit.output
+        version = re.search(r"version: (v[0-9a-f]+)", commit.output)
+        assert version
+
+        missing_confirm = runner.invoke(
+            main, ["lifecycle", "degrade", version.group(1), "--to", "recipe_only"]
+        )
+        assert missing_confirm.exit_code != 0
+        assert "requires --confirm RECIPE_ONLY" in missing_confirm.output
+
+        degrade = runner.invoke(
+            main,
+            [
+                "lifecycle",
+                "degrade",
+                version.group(1),
+                "--to",
+                "recipe_only",
+                "--confirm",
+                "RECIPE_ONLY",
+                "--message",
+                "retire outputs",
+            ],
+        )
+        assert degrade.exit_code == 0, degrade.output
+        assert "old_state: [Exploring/resident]" in degrade.output
+        assert "new_state: [Exploring/recipe_only]" in degrade.output
+        assert "degrade: moved" in degrade.output
+        assert "physical_gc: not-implemented" in degrade.output
+
+        show = runner.invoke(main, ["show", version.group(1)])
+        assert show.exit_code == 0, show.output
+        assert "state: [Exploring/recipe_only]" in show.output
+
+        lifecycle_events = runner.invoke(
+            main, ["lifecycle", "events", version.group(1)]
+        )
+        assert lifecycle_events.exit_code == 0, lifecycle_events.output
+        assert "Exploring->Exploring" in lifecycle_events.output
+        assert "resident->recipe_only" in lifecycle_events.output
+        assert "retire outputs" in lifecycle_events.output
+
+        branch = runner.invoke(main, ["branch", "create", "recipe/only"])
+        assert branch.exit_code == 0, branch.output
+        assert "branch: recipe/only" in branch.output
+
+        plan = runner.invoke(main, ["checkout", "recipe/only", "--plan"])
+        assert plan.exit_code == 0, plan.output
+        assert "retention: recipe_only" in plan.output
+        assert "checkout_scope: inputs-only" in plan.output
+        assert "omitted_outputs: 2" in plan.output
+        assert "files: 2" in plan.output
+        assert "materialization: plan-only" in plan.output
+        target_path = (
+            workspace.parent
+            / ".big-checkouts"
+            / "APR"
+            / "recipe__only"
+            / version.group(1)
+        )
+        assert f"target_path: {target_path}" in plan.output
+        assert not target_path.exists()
+
+        checkout = runner.invoke(main, ["checkout", "recipe/only"])
+        assert checkout.exit_code == 0, checkout.output
+        assert "retention: recipe_only" in checkout.output
+        assert "checkout_scope: inputs-only" in checkout.output
+        assert "omitted_outputs: 2" in checkout.output
+        assert "files: 2" in checkout.output
+        assert "materialization: partial" in checkout.output
+        assert (target_path / "inputs" / "top.v").exists()
+        assert (target_path / "scripts" / "place.tcl").exists()
+        assert not (target_path / "outputs" / "top.def").exists()
+        assert not (target_path / "reports" / "place.rpt").exists()
+        marker = json.loads(
+            (target_path / ".big-checkout.json").read_text(encoding="utf-8")
+        )
+        assert marker["materialization"] == "partial"
+        assert marker["omitted_outputs"] == 2
+        assert marker["files"] == 2
+
+        checkout_again = runner.invoke(main, ["checkout", "recipe/only"])
+        assert checkout_again.exit_code == 0, checkout_again.output
+        assert "materialization: reused" in checkout_again.output
+
+        os.chdir(target_path)
+        status = runner.invoke(main, ["status"])
+        assert status.exit_code == 0, status.output
+        assert "default_ref: recipe/only" in status.output
+        assert f"head: {version.group(1)}" in status.output
+        assert "head_state: [Exploring/recipe_only]" in status.output
+
+        audit_verify = runner.invoke(main, ["audit", "verify"])
+        assert audit_verify.exit_code == 0, audit_verify.output
+        assert "events: 3" in audit_verify.output
+        assert "integrity: ok" in audit_verify.output
+
+        audit_log = runner.invoke(main, ["audit", "log", "--limit", "5"])
+        assert audit_log.exit_code == 0, audit_log.output
+        assert f"degrade version {version.group(1)}" in audit_log.output
+        assert "create_branch branch recipe/only" in audit_log.output
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_shell_init_outputs_checkout_wrapper() -> None:
     runner = CliRunner()
     for shell in ("bash", "zsh"):

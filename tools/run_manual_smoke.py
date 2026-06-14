@@ -251,6 +251,49 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     if alice_version in shaq_log:
         raise SystemExit("shaqsnake workspace log contains alice version")
 
+    shaq_degrade = _run_big(
+        [
+            "lifecycle",
+            "degrade",
+            shaq_version,
+            "--to",
+            "recipe_only",
+            "--confirm",
+            "RECIPE_ONLY",
+            "--message",
+            "smoke recipe-only",
+        ],
+        shaq_workspace,
+        env,
+    )
+    _expect_contains(shaq_degrade, "old_state: [Exploring/resident]")
+    _expect_contains(shaq_degrade, "new_state: [Exploring/recipe_only]")
+    _expect_contains(shaq_degrade, "physical_gc: not-implemented")
+
+    _run_big(["branch", "create", "recipe/shaq"], shaq_workspace, env)
+
+    recipe_plan = _run_big(["checkout", "recipe/shaq", "--plan"], shaq_workspace, env)
+    _expect_contains(recipe_plan, f"version: {shaq_version}")
+    _expect_contains(recipe_plan, "retention: recipe_only")
+    _expect_contains(recipe_plan, "checkout_scope: inputs-only")
+    _expect_contains(recipe_plan, "omitted_outputs: 2")
+    _expect_contains(recipe_plan, "files: 3")
+    _expect_contains(recipe_plan, "materialization: plan-only")
+
+    recipe_checkout = _run_big(["checkout", "recipe/shaq"], shaq_workspace, env)
+    _expect_contains(recipe_checkout, "materialization: partial")
+    _expect_contains(recipe_checkout, "checkout_scope: inputs-only")
+    recipe_path = Path(_value_from(recipe_checkout, "target_path"))
+    if not (recipe_path / "inputs" / "top.v").exists():
+        raise SystemExit(f"Recipe-only checkout input is missing: {recipe_path}")
+    if not (recipe_path / "scripts" / "place.tcl").exists():
+        raise SystemExit(f"Recipe-only checkout script is missing: {recipe_path}")
+    if (recipe_path / "outputs" / "top_placed.def").exists():
+        raise SystemExit(f"Recipe-only checkout copied an output: {recipe_path}")
+    recipe_status = _run_big(["status"], recipe_path, env)
+    _expect_contains(recipe_status, "default_ref: recipe/shaq")
+    _expect_contains(recipe_status, "head_state: [Exploring/recipe_only]")
+
     main_log = _run_big(["log", "main"], alice_workspace, env)
     _expect_contains(main_log, "No versions visible on branch main.")
 
@@ -268,15 +311,18 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     _expect_contains(stats, "Candidate: versions=1")
     _expect_contains(stats, "Exploring: versions=1")
     _expect_contains(stats, "retention:")
-    _expect_contains(stats, "resident: versions=2")
+    _expect_contains(stats, "resident: versions=1")
+    _expect_contains(stats, "recipe_only: versions=1")
 
     audit_verify = _run_big(["audit", "verify"], alice_workspace, env)
-    _expect_contains(audit_verify, "events: 5")
+    _expect_contains(audit_verify, "events: 7")
     _expect_contains(audit_verify, "integrity: ok")
 
-    audit_log = _run_big(["audit", "log", "--limit", "5"], alice_workspace, env)
+    audit_log = _run_big(["audit", "log", "--limit", "7"], alice_workspace, env)
     _expect_contains(audit_log, f"commit version {shaq_version}")
+    _expect_contains(audit_log, f"degrade version {shaq_version}")
     _expect_contains(audit_log, f"promote version {alice_version}")
+    _expect_contains(audit_log, "create_branch branch recipe/shaq")
     _expect_contains(audit_log, "create_branch branch feature/place")
     print("manual smoke: ok")
 

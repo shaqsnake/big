@@ -38,6 +38,7 @@ from .metadata import FileRef, SQLiteMetadataRepository, VersionRecord
 BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 REVIEW_STATES = ("Exploring", "Candidate", "Pinned", "Golden")
 REVIEW_STATE_ORDER = {state: index for index, state in enumerate(REVIEW_STATES)}
+RETENTION_STATES = ("resident", "recipe_only", "archived", "missing")
 
 
 def _repo_from_cwd() -> tuple[object, SQLiteMetadataRepository]:
@@ -72,6 +73,16 @@ def _canonical_review_state(value: str) -> str:
     choices = ", ".join(REVIEW_STATES)
     raise click.ClickException(
         f"Unknown review state: {value}; expected one of {choices}"
+    )
+
+
+def _canonical_retention_state(value: str) -> str:
+    for state in RETENTION_STATES:
+        if value.lower() == state.lower():
+            return state
+    choices = ", ".join(RETENTION_STATES)
+    raise click.ClickException(
+        f"Unknown retention state: {value}; expected one of {choices}"
     )
 
 
@@ -205,7 +216,7 @@ def _resolve_checkout_workspace_context(
         if (
             marker.get("schema") != 1
             or marker.get("repo_id") != config.repo_id
-            or marker.get("materialization") != "copy"
+            or marker.get("materialization") not in {"copy", "partial"}
         ):
             raise click.ClickException(f"Checkout marker does not match repo: {marker_path}")
 
@@ -326,6 +337,7 @@ def _checkout_marker_matches(
     repo_id: str,
     branch_name: str,
     version_id: str,
+    materialization_kind: str,
 ) -> bool:
     marker_path = target_path / ".big-checkout.json"
     if not marker_path.exists():
@@ -339,7 +351,7 @@ def _checkout_marker_matches(
         and marker.get("repo_id") == repo_id
         and marker.get("branch") == branch_name
         and marker.get("version") == version_id
-        and marker.get("materialization") == "copy"
+        and marker.get("materialization") == materialization_kind
     )
 
 
@@ -377,6 +389,8 @@ def _materialize_checkout(
     version_id: str,
     target_path: Path,
     refs: list[FileRef],
+    materialization_kind: str,
+    omitted_outputs: int = 0,
 ) -> str:
     if target_path.exists():
         if not target_path.is_dir():
@@ -388,6 +402,7 @@ def _materialize_checkout(
             repo_id=config.repo_id,
             branch_name=branch_name,
             version_id=version_id,
+            materialization_kind=materialization_kind,
         ):
             return "reused"
         raise click.ClickException(
@@ -402,7 +417,7 @@ def _materialize_checkout(
         "repo_id": config.repo_id,
         "branch": branch_name,
         "version": version_id,
-        "materialization": "copy",
+        "materialization": materialization_kind,
         "source_workspace": str(workspace_context.workspace_path),
         "target_path": str(target_path),
         "work_root_id": workspace_context.work_root.id,
@@ -410,6 +425,7 @@ def _materialize_checkout(
         "flow": workspace_context.flow,
         "files": len(refs),
         "bytes": total_bytes,
+        "omitted_outputs": omitted_outputs,
         "created_at": _utc_now(),
     }
 
@@ -427,7 +443,9 @@ def _materialize_checkout(
     except OSError as exc:
         shutil.rmtree(temp_path, ignore_errors=True)
         raise click.ClickException(f"Failed to materialize checkout: {exc}") from exc
-    return "copied"
+    if materialization_kind == "copy":
+        return "copied"
+    return materialization_kind
 
 
 def _parse_work_root(value: str) -> WorkRoot:
@@ -648,7 +666,16 @@ def checkout_cmd(
         click.echo(target_path)
         return
 
-    refs = _dedupe_checkout_refs(metadata.get_file_refs(version.id))
+    all_refs = _dedupe_checkout_refs(metadata.get_file_refs(version.id))
+    refs = all_refs
+    checkout_scope = "full"
+    materialization_kind = "copy"
+    omitted_outputs = 0
+    if version.retention_state == "recipe_only":
+        refs = [ref for ref in all_refs if ref.role == "input"]
+        omitted_outputs = sum(1 for ref in all_refs if ref.role == "output")
+        checkout_scope = "inputs-only"
+        materialization_kind = "partial"
     total_bytes = sum(ref.size for ref in refs)
     materialization = "plan-only"
     if not plan:
@@ -659,6 +686,8 @@ def checkout_cmd(
             version_id=version.id,
             target_path=target_path,
             refs=refs,
+            materialization_kind=materialization_kind,
+            omitted_outputs=omitted_outputs,
         )
         if new_branch is not None:
             try:
@@ -685,6 +714,10 @@ def checkout_cmd(
         click.echo(f"branch_created: {'plan-only' if plan else 'yes'}")
     click.echo(f"source_workspace: {workspace_context.workspace_path}")
     click.echo(f"target_path: {target_path}")
+    click.echo(f"retention: {version.retention_state}")
+    click.echo(f"checkout_scope: {checkout_scope}")
+    if omitted_outputs:
+        click.echo(f"omitted_outputs: {omitted_outputs}")
     click.echo(f"files: {len(refs)}")
     click.echo(f"bytes: {total_bytes}")
     click.echo(f"materialization: {materialization}")
@@ -990,6 +1023,80 @@ def promote_cmd(version: str, target_state: str, message: str, confirm: str) -> 
     click.echo("retention: unchanged")
     if target_state == "Candidate":
         click.echo("candidate_outbox: not-implemented")
+
+
+@lifecycle.command("degrade")
+@click.argument("version")
+@click.option(
+    "--to",
+    "target_retention",
+    required=True,
+    type=click.Choice(["recipe_only"], case_sensitive=False),
+    help="Target retention state. The prototype only supports recipe_only.",
+)
+@click.option(
+    "--message",
+    "-m",
+    default="",
+    help="Reason for the retention transition.",
+)
+@click.option(
+    "--confirm",
+    default="",
+    help="Required as RECIPE_ONLY when degrading to recipe_only.",
+)
+def lifecycle_degrade_cmd(
+    version: str,
+    target_retention: str,
+    message: str,
+    confirm: str,
+) -> None:
+    """Mark an Exploring version as recipe_only without deleting CAS objects."""
+    _, metadata = _repo_from_cwd()
+    record = metadata.get_version(version)
+    if record is None:
+        raise click.ClickException(f"Version not found or ambiguous: {version}")
+
+    target_retention = _canonical_retention_state(target_retention)
+    if target_retention != "recipe_only":
+        raise click.ClickException("Only recipe_only degradation is supported")
+    if record.review_state != "Exploring":
+        raise click.ClickException(
+            "Only Exploring versions can be degraded to recipe_only in this prototype"
+        )
+    if record.retention_state == "recipe_only":
+        click.echo(f"version: {record.id}")
+        click.echo(f"old_state: [{record.review_state}/{record.retention_state}]")
+        click.echo(f"new_state: [{record.review_state}/{record.retention_state}]")
+        click.echo("degrade: no-op")
+        click.echo("physical_gc: not-implemented")
+        return
+    if record.retention_state != "resident":
+        raise click.ClickException(
+            "Only resident versions can be degraded to recipe_only in this prototype"
+        )
+    if confirm != "RECIPE_ONLY":
+        raise click.ClickException(
+            "Degrading to recipe_only requires --confirm RECIPE_ONLY"
+        )
+
+    try:
+        metadata.update_retention_state(
+            version_id=record.id,
+            expected_old_retention_state=record.retention_state,
+            new_retention_state=target_retention,
+            actor=getpass.getuser(),
+            created_at=_utc_now(),
+            reason=message,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"version: {record.id}")
+    click.echo(f"old_state: [{record.review_state}/{record.retention_state}]")
+    click.echo(f"new_state: [{record.review_state}/{target_retention}]")
+    click.echo("degrade: moved")
+    click.echo("physical_gc: not-implemented")
 
 
 @lifecycle.command("events")

@@ -464,6 +464,75 @@ class SQLiteMetadataRepository(MetadataRepository):
                 },
             )
 
+    def update_retention_state(
+        self,
+        version_id: str,
+        expected_old_retention_state: str,
+        new_retention_state: str,
+        actor: str,
+        created_at: str,
+        reason: str,
+    ) -> None:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT review_state, retention_state
+                FROM versions
+                WHERE id = ?
+                """,
+                (version_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Version not found: {version_id}")
+
+            old_review_state = row["review_state"]
+            old_retention_state = row["retention_state"]
+            if old_retention_state != expected_old_retention_state:
+                raise ValueError(f"Version retention state changed: {version_id}")
+
+            conn.execute(
+                """
+                UPDATE versions
+                SET retention_state = ?
+                WHERE id = ? AND retention_state = ?
+                """,
+                (new_retention_state, version_id, expected_old_retention_state),
+            )
+            conn.execute(
+                """
+                INSERT INTO lifecycle_events(
+                    version_id, old_review_state, new_review_state,
+                    old_retention_state, new_retention_state, actor, created_at,
+                    reason
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    version_id,
+                    old_review_state,
+                    old_review_state,
+                    old_retention_state,
+                    new_retention_state,
+                    actor,
+                    created_at,
+                    reason,
+                ),
+            )
+            _append_audit_event(
+                conn,
+                action="degrade",
+                entity_type="version",
+                entity_id=version_id,
+                actor=actor,
+                created_at=created_at,
+                payload={
+                    "version_id": version_id,
+                    "review_state": old_review_state,
+                    "old_retention_state": old_retention_state,
+                    "new_retention_state": new_retention_state,
+                    "reason": reason,
+                },
+            )
+
     def list_lifecycle_events(
         self,
         version_id: str,

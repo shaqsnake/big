@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
@@ -200,7 +200,7 @@ big promote <version> --to Golden --confirm GOLDEN --message 'tapeout approved'
 
 ### 用例 4：查看和校验审计 hash-chain
 
-每次 `commit`、`branch create`、`reset` 和 `promote` 都会追加一条本地 audit 事件，并用上一条事件 hash 串成链：
+每次 `commit`、`branch create`、`reset`、`promote` 和 `lifecycle degrade` 都会追加一条本地 audit 事件，并用上一条事件 hash 串成链：
 
 ```bash
 big audit log --full
@@ -312,7 +312,47 @@ big log
 - 显式执行 `big log workspace/default/alice/APR` 才会查看 `alice/APR` 的历史。
 - `big log main` 默认为空，除非你显式执行过 `big commit --branch main ...`。
 
-### 用例 8：从当前 workspace 创建命名 branch
+### 用例 8：将 Exploring version 标记为 recipe_only 并验证 inputs-only checkout
+
+保持在 `shaqsnake/APR` workspace，使用刚才 shaqsnake 提交得到的 version ID。当前原型只允许把 `Exploring/resident` version 降级为 `recipe_only`；已经晋升到 `Candidate`、`Pinned` 或 `Golden` 的 version 不允许执行这个降级。
+
+```bash
+big lifecycle degrade <version> \
+  --to recipe_only \
+  --confirm RECIPE_ONLY \
+  --message 'retire outputs'
+big show <version>
+big lifecycle events <version>
+```
+
+期望：
+
+- `big lifecycle degrade` 输出 `old_state: [Exploring/resident]`
+- `big lifecycle degrade` 输出 `new_state: [Exploring/recipe_only]`
+- 输出 `physical_gc: not-implemented`，表示当前原型只更新元数据状态，不删除、不搬迁 CAS 对象
+- `big show <version>` 展示 `state: [Exploring/recipe_only]`
+- `big lifecycle events <version>` 展示 `Exploring->Exploring` 和 `resident->recipe_only`
+
+为这个 recipe-only version 创建命名 branch，并验证 checkout 投影：
+
+```bash
+big branch create recipe/shaq
+big checkout recipe/shaq --plan
+big checkout recipe/shaq
+```
+
+期望：
+
+- `--plan` 输出 `retention: recipe_only`
+- `--plan` 输出 `checkout_scope: inputs-only`
+- 输出 `omitted_outputs: 2`，表示 `outputs/**` 和 `reports/**` 中的 FileRef 没有被物化
+- 不带 `--plan` 时输出 `materialization: partial`
+- checkout 目标目录下存在 `inputs/` 和 `scripts/`
+- checkout 目标目录下不存在 `outputs/` 和 `reports/`
+- `.big-checkout.json` 中的 `materialization` 为 `partial`，并记录 `omitted_outputs`
+- 进入目标目录后执行 `big status`，会显示 `default_ref: recipe/shaq` 和 `head_state: [Exploring/recipe_only]`
+
+### 用例 9：从当前 workspace 创建命名 branch
 
 回到 alice 的 workspace：
 
@@ -355,7 +395,7 @@ big branch show workspace/default/alice/APR
 
 此时会额外显示 workspace-private ref。
 
-### 用例 9：checkout 目标路径、copy-only 物化和 shell 集成
+### 用例 10：checkout 目标路径、copy-only 物化和 shell 集成
 
 当前原型支持两步验证 checkout：先用 `--plan` 确认目标 branch、head version 和稳定目录路径；再执行不带 `--plan` 的 `big checkout <branch>`，把该 version 的 FileRef 从 CAS 复制到用户私有目标目录。CLI 子进程本身不能切换父 shell 的当前目录；未启用 shell 集成时，需要手工执行输出中的 `cd -- <target-path>`。启用 shell 集成后，wrapper 会在 checkout 成功物化或复用目录后自动进入目标目录。
 
@@ -367,6 +407,8 @@ big checkout feature/place --plan
 
 - 输出 `branch: feature/place`
 - 输出 `version: <feature/place-head-version>`
+- 输出 `retention: resident`
+- 输出 `checkout_scope: full`
 - 输出 `materialization: plan-only`
 - 输出 `target_path: .../user/alice/.big-checkouts/APR/feature__place/<version>`
 - 输出可复制执行的 `cd: cd -- <target-path>`
@@ -381,6 +423,7 @@ big checkout feature/place
 期望：
 
 - 输出 `materialization: copied`
+- 输出 `retention: resident` 和 `checkout_scope: full`
 - 输出 `files: ...` 和 `bytes: ...`
 - 创建目标目录 `.../user/alice/.big-checkouts/APR/feature__place/<version>`
 - 在目标目录下可以看到当时 version 对应的 `inputs/`、`scripts/`、`outputs/`、`reports/` 文件
@@ -456,6 +499,7 @@ pwd
 - `big verify`
 - `big diff`
 - `big promote`
+- `big lifecycle degrade`
 - `big lifecycle events`
 - `big audit log`
 - `big audit verify`
@@ -475,3 +519,4 @@ pwd
 - `big restore --in-place`
 - Linux groups 权限接入
 - 3DIC 多 work root checkout/restore 联动
+- recipe_only 的物理 GC、归档搬迁和远端召回
