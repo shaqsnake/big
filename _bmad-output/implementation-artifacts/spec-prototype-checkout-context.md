@@ -21,7 +21,7 @@ context:
 - 不改变普通 `/user/<user>/<flow>` workspace 的解析规则。
 - 不改变 checkout 目录结构、CAS 物化方式或 shell wrapper 行为。
 - 只识别由 BIG 原型写入的 schema 1 copy marker；marker 损坏或 repo 不匹配时拒绝继续，避免静默写错 ref。
-- 仍不实现显式 `restore --in-place` 或 workspace generation 表。
+- 本 checkout context 切片不负责显式 `restore --in-place`；workspace generation 由 restore 切片维护。
 
 ## Acceptance
 

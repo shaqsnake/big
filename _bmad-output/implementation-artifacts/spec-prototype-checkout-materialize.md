@@ -21,7 +21,7 @@ context:
 - 只实现 copy-only 物化，不创建硬链接或符号链接，不暴露可写 CAS。
 - 物化前校验 CAS 对象存在、大小一致且 SHA-256 匹配。
 - `--plan` 仍只输出路径，不创建目标目录。
-- 不移动 branch head，不改写源 workspace，不实现 in-place restore，不登记 workspace generation。
+- 本 checkout 物化切片不移动 branch head，不改写源 workspace，也不负责 in-place restore 或 workspace generation。
 - 如果目标目录已存在但 marker 不匹配，拒绝覆盖，避免破坏用户已有数据。
 
 ## Review Order

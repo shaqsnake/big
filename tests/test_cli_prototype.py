@@ -633,6 +633,182 @@ def test_audit_verify_detects_tampered_event(tmp_path: Path) -> None:
         os.chdir(old_cwd)
 
 
+def test_restore_in_place_rewrites_clean_workspace_with_journal(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    top_v1 = "module top; endmodule\n"
+    def_v1 = "VERSION 5.8 ;\n"
+    top_v2 = "module top; wire a; endmodule\n"
+    def_v2 = "VERSION 5.8 ;\nCOMPONENTS 1 ;\n"
+    _write(workspace / "inputs" / "top.v", top_v1)
+    _write(workspace / "scripts" / "place.tcl", "place_design\n")
+    _write(workspace / "outputs" / "top.def", def_v1)
+    _write(workspace / "reports" / "place.rpt", "wns 0.01\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        first = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**;scripts/**",
+                "--outputs",
+                "outputs/**;reports/**",
+                "--message",
+                "restore base",
+            ],
+        )
+        assert first.exit_code == 0, first.output
+        first_version = re.search(r"version: (v[0-9a-f]+)", first.output)
+        assert first_version
+
+        _write(workspace / "inputs" / "top.v", top_v2)
+        _write(workspace / "outputs" / "top.def", def_v2)
+        second = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**;scripts/**",
+                "--outputs",
+                "outputs/**;reports/**",
+                "--message",
+                "restore modified",
+            ],
+        )
+        assert second.exit_code == 0, second.output
+        second_version = re.search(r"version: (v[0-9a-f]+)", second.output)
+        assert second_version
+
+        missing_flag = runner.invoke(main, ["restore", first_version.group(1)])
+        assert missing_flag.exit_code != 0
+        assert "restore requires explicit --in-place" in missing_flag.output
+
+        plan = runner.invoke(
+            main, ["restore", first_version.group(1), "--in-place", "--plan"]
+        )
+        assert plan.exit_code == 0, plan.output
+        assert f"current_head: {second_version.group(1)}" in plan.output
+        assert f"target_version: {first_version.group(1)}" in plan.output
+        assert "generation_current: 0" in plan.output
+        assert "generation_next: 1" in plan.output
+        assert "dirty: no" in plan.output
+        assert "active_lease_check: not-implemented" in plan.output
+        assert "quiet_state: required" in plan.output
+        assert "add: 0" in plan.output
+        assert "overwrite: 2" in plan.output
+        assert "delete: 0" in plan.output
+        assert "keep: 2" in plan.output
+        assert "changed_files: 2" in plan.output
+        assert "journal: plan-only" in plan.output
+        assert "materialization: plan-only" in plan.output
+        assert (workspace / "inputs" / "top.v").read_text(encoding="utf-8") == top_v2
+
+        no_confirm = runner.invoke(
+            main, ["restore", first_version.group(1), "--in-place"]
+        )
+        assert no_confirm.exit_code != 0
+        assert "materialization: confirmation-required" in no_confirm.output
+        assert "requires --confirm RESTORE" in no_confirm.output
+
+        _write(workspace / "inputs" / "top.v", "module top; wire dirty; endmodule\n")
+        dirty = runner.invoke(
+            main,
+            [
+                "restore",
+                first_version.group(1),
+                "--in-place",
+                "--confirm",
+                "RESTORE",
+            ],
+        )
+        assert dirty.exit_code != 0
+        assert "dirty: yes" in dirty.output
+        assert "modified input inputs/top.v" in dirty.output
+        _write(workspace / "inputs" / "top.v", top_v2)
+
+        restored = runner.invoke(
+            main,
+            [
+                "restore",
+                first_version.group(1),
+                "--in-place",
+                "--confirm",
+                "RESTORE",
+            ],
+        )
+        assert restored.exit_code == 0, restored.output
+        assert "materialization: restored" in restored.output
+        assert "restore: completed" in restored.output
+        assert (
+            f"branch_head: {second_version.group(1)}->{first_version.group(1)}"
+            in restored.output
+        )
+        journal = re.search(r"journal: (r[0-9a-f]+)", restored.output)
+        assert journal
+        assert (workspace / "inputs" / "top.v").read_text(encoding="utf-8") == top_v1
+        assert (workspace / "outputs" / "top.def").read_text(encoding="utf-8") == def_v1
+
+        state = json.loads(
+            (workspace / ".big-workspace.json").read_text(encoding="utf-8")
+        )
+        assert state["generation"] == 1
+        assert state["restored_from"] == first_version.group(1)
+        assert state["restore_journal_id"] == journal.group(1)
+
+        journal_path = (
+            repo_root / ".big" / "restore-journals" / f"{journal.group(1)}.json"
+        )
+        journal_data = json.loads(journal_path.read_text(encoding="utf-8"))
+        assert journal_data["status"] == "completed"
+        assert journal_data["target_version_id"] == first_version.group(1)
+        assert len(journal_data["operations"]) == 2
+        assert {item["status"] for item in journal_data["operations"]} == {"done"}
+
+        status = runner.invoke(main, ["status"])
+        assert status.exit_code == 0, status.output
+        assert f"head: {first_version.group(1)}" in status.output
+        assert "generation: 1" in status.output
+        assert f"restored_from: {first_version.group(1)}" in status.output
+        assert f"restore_journal: {journal.group(1)}" in status.output
+
+        log = runner.invoke(main, ["log"])
+        assert log.exit_code == 0, log.output
+        assert first_version.group(1) in log.output
+        assert second_version.group(1) not in log.output
+
+        branch_events = runner.invoke(main, ["branch", "events"])
+        assert branch_events.exit_code == 0, branch_events.output
+        assert "restore workspace/default/alice/APR" in branch_events.output
+        assert (
+            f"{second_version.group(1)}->{first_version.group(1)}"
+            in branch_events.output
+        )
+
+        audit_verify = runner.invoke(main, ["audit", "verify"])
+        assert audit_verify.exit_code == 0, audit_verify.output
+        assert "events: 3" in audit_verify.output
+        assert "integrity: ok" in audit_verify.output
+
+        audit_log = runner.invoke(main, ["audit", "log", "--limit", "5"])
+        assert audit_log.exit_code == 0, audit_log.output
+        assert "restore workspace user/alice/APR" in audit_log.output
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_recipe_only_checkout_materializes_inputs_only(tmp_path: Path) -> None:
     runner = CliRunner()
     repo_root = tmp_path / "data" / "DemoChip"

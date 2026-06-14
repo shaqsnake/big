@@ -381,6 +381,66 @@ class SQLiteMetadataRepository(MetadataRepository):
                 },
             )
 
+    def record_restore(
+        self,
+        branch: str,
+        expected_old_head: str,
+        new_head: str,
+        journal_id: str,
+        workspace_id: str,
+        workspace_path: str,
+        generation: int,
+        actor: str,
+        created_at: str,
+        plan: dict[str, object],
+    ) -> None:
+        with self.connect() as conn:
+            if expected_old_head != new_head:
+                cursor = conn.execute(
+                    """
+                    UPDATE branches
+                    SET head_version_id = ?
+                    WHERE name = ? AND head_version_id = ?
+                    """,
+                    (new_head, branch, expected_old_head),
+                )
+                if cursor.rowcount != 1:
+                    raise ValueError(f"Branch head changed before restore: {branch}")
+                conn.execute(
+                    """
+                    INSERT INTO branch_events(
+                        branch, event_type, old_head_version_id,
+                        new_head_version_id, actor, created_at, reason
+                    ) VALUES (?, 'restore', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        branch,
+                        expected_old_head,
+                        new_head,
+                        actor,
+                        created_at,
+                        f"restore journal {journal_id}",
+                    ),
+                )
+            _append_audit_event(
+                conn,
+                action="restore",
+                entity_type="workspace",
+                entity_id=workspace_id,
+                actor=actor,
+                created_at=created_at,
+                payload={
+                    "branch": branch,
+                    "old_head_version_id": expected_old_head,
+                    "new_head_version_id": new_head,
+                    "journal_id": journal_id,
+                    "workspace_id": workspace_id,
+                    "workspace_path": workspace_path,
+                    "generation": generation,
+                    "plan": plan,
+                },
+            )
+
     def list_branch_events(self, branch: str, limit: int = 20) -> list[BranchEvent]:
         with self.connect() as conn:
             rows = conn.execute(

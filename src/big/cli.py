@@ -448,6 +448,224 @@ def _materialize_checkout(
     return materialization_kind
 
 
+def _workspace_state_path(workspace_path: Path) -> Path:
+    return workspace_path / ".big-workspace.json"
+
+
+def _read_workspace_generation(workspace_path: Path, repo_id: str) -> int:
+    state_path = _workspace_state_path(workspace_path)
+    if not state_path.exists():
+        return 0
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise click.ClickException(f"Invalid workspace state marker: {state_path}") from exc
+    if state.get("schema") != 1 or state.get("repo_id") != repo_id:
+        raise click.ClickException(f"Workspace state marker does not match repo: {state_path}")
+    try:
+        return int(state.get("generation", 0))
+    except (TypeError, ValueError) as exc:
+        raise click.ClickException(f"Invalid workspace generation: {state_path}") from exc
+
+
+def _write_workspace_state(
+    workspace_path: Path,
+    repo_id: str,
+    branch_name: str,
+    workspace_id: str,
+    generation: int,
+    restored_from: str,
+    journal_id: str,
+    actor: str,
+    restored_at: str,
+) -> None:
+    state = {
+        "schema": 1,
+        "repo_id": repo_id,
+        "branch": branch_name,
+        "workspace_id": workspace_id,
+        "generation": generation,
+        "restored_from": restored_from,
+        "restore_journal_id": journal_id,
+        "restored_at": restored_at,
+        "actor": actor,
+    }
+    _workspace_state_path(workspace_path).write_text(
+        json.dumps(state, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def _workspace_internal_path(rel_path: str) -> bool:
+    parts = Path(rel_path).parts
+    return (
+        rel_path in {".big-checkout.json", ".big-workspace.json"}
+        or any(part.startswith(".big-restore-") for part in parts)
+    )
+
+
+def _workspace_file_paths(workspace_path: Path) -> set[str]:
+    files: set[str] = set()
+    if not workspace_path.exists():
+        return files
+    for path in workspace_path.rglob("*"):
+        if not path.is_file():
+            continue
+        rel_path = path.relative_to(workspace_path).as_posix()
+        if _workspace_internal_path(rel_path):
+            continue
+        files.add(rel_path)
+    return files
+
+
+def _dirty_refs(workspace_path: Path, refs: list[FileRef]) -> list[tuple[str, FileRef]]:
+    dirty: list[tuple[str, FileRef]] = []
+    for ref in refs:
+        destination = _checkout_destination(workspace_path, ref.path)
+        if not destination.exists():
+            dirty.append(("missing", ref))
+            continue
+        if destination.stat().st_size != ref.size:
+            dirty.append(("modified", ref))
+            continue
+        if sha256_file(destination) != ref.cas_hash:
+            dirty.append(("modified", ref))
+    return dirty
+
+
+def _restore_plan(
+    workspace_path: Path,
+    current_refs: list[FileRef],
+    target_refs: list[FileRef],
+) -> dict[str, object]:
+    current_by_path = {ref.path: ref for ref in _dedupe_checkout_refs(current_refs)}
+    target_by_path = {ref.path: ref for ref in _dedupe_checkout_refs(target_refs)}
+    workspace_files = _workspace_file_paths(workspace_path)
+
+    add_paths = sorted(set(target_by_path) - set(current_by_path))
+    overwrite_paths = sorted(
+        path
+        for path in set(target_by_path) & set(current_by_path)
+        if (
+            target_by_path[path].cas_hash != current_by_path[path].cas_hash
+            or target_by_path[path].size != current_by_path[path].size
+        )
+    )
+    keep_paths = sorted(
+        path
+        for path in set(target_by_path) & set(current_by_path)
+        if (
+            target_by_path[path].cas_hash == current_by_path[path].cas_hash
+            and target_by_path[path].size == current_by_path[path].size
+        )
+    )
+    delete_paths = sorted(workspace_files - set(target_by_path))
+    bytes_to_write = sum(target_by_path[path].size for path in add_paths + overwrite_paths)
+
+    return {
+        "add_paths": add_paths,
+        "overwrite_paths": overwrite_paths,
+        "delete_paths": delete_paths,
+        "keep_paths": keep_paths,
+        "add": len(add_paths),
+        "overwrite": len(overwrite_paths),
+        "delete": len(delete_paths),
+        "keep": len(keep_paths),
+        "changed_files": len(add_paths) + len(overwrite_paths) + len(delete_paths),
+        "bytes": bytes_to_write,
+    }
+
+
+def _print_dirty_summary(dirty: list[tuple[str, FileRef]]) -> None:
+    click.echo("dirty: yes")
+    click.echo(f"dirty_files: {len(dirty)}")
+    for state, ref in dirty[:10]:
+        click.echo(f"  {state} {ref.role} {ref.path}")
+    if len(dirty) > 10:
+        click.echo(f"  ... {len(dirty) - 10} more")
+
+
+def _print_restore_plan(
+    branch_name: str,
+    current_head: str,
+    target_version: str,
+    workspace_context: WorkspaceContext,
+    generation_current: int,
+    generation_next: int,
+    plan: dict[str, object],
+    delete_missing: bool,
+    materialization: str,
+    journal_id: str | None = None,
+) -> None:
+    click.echo(f"branch: {branch_name}")
+    click.echo(f"current_head: {current_head}")
+    click.echo(f"target_version: {target_version}")
+    click.echo(f"workspace: {workspace_context.workspace_id}")
+    click.echo(f"workspace_path: {workspace_context.workspace_path}")
+    click.echo(f"generation_current: {generation_current}")
+    click.echo(f"generation_next: {generation_next}")
+    click.echo("dirty: no")
+    click.echo("active_lease_check: not-implemented")
+    click.echo(
+        "quiet_state: user-confirmed" if materialization == "restored" else "quiet_state: required"
+    )
+    click.echo(f"add: {plan['add']}")
+    click.echo(f"overwrite: {plan['overwrite']}")
+    click.echo(f"delete: {plan['delete']}")
+    click.echo(f"keep: {plan['keep']}")
+    click.echo(f"changed_files: {plan['changed_files']}")
+    click.echo(f"bytes: {plan['bytes']}")
+    click.echo(f"delete_missing: {'yes' if delete_missing else 'no'}")
+    click.echo(f"journal: {journal_id or 'plan-only'}")
+    click.echo(f"materialization: {materialization}")
+
+
+def _restore_journal_path(config: RepoConfig, journal_id: str) -> Path:
+    return config.big_dir / "restore-journals" / f"{journal_id}.json"
+
+
+def _write_restore_journal(config: RepoConfig, journal: dict[str, object]) -> None:
+    path = _restore_journal_path(config, str(journal["journal_id"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(journal, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _restore_ref_from_cas(cas_root: Path, workspace_path: Path, ref: FileRef) -> None:
+    source = object_path(cas_root, ref.cas_hash)
+    if not source.exists():
+        raise click.ClickException(
+            f"Missing CAS object for {ref.role} {ref.path}: {_short_hash(ref.cas_hash)}"
+        )
+    if source.stat().st_size != ref.size:
+        raise click.ClickException(f"CAS object size mismatch for {ref.role} {ref.path}")
+    if sha256_file(source) != ref.cas_hash:
+        raise click.ClickException(f"CAS object hash mismatch for {ref.role} {ref.path}")
+
+    destination = _checkout_destination(workspace_path, ref.path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = destination.parent / f".big-restore-{uuid.uuid4().hex}-{destination.name}"
+    try:
+        shutil.copyfile(source, temp_path)
+        if temp_path.stat().st_size != ref.size or sha256_file(temp_path) != ref.cas_hash:
+            raise click.ClickException(f"Restored temp file verification failed: {ref.path}")
+        if destination.exists():
+            destination.chmod(0o644)
+        try:
+            temp_path.replace(destination)
+        except OSError:
+            shutil.copyfile(temp_path, destination)
+        destination.chmod(0o644)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
+def _delete_restore_path(workspace_path: Path, rel_path: str) -> None:
+    destination = _checkout_destination(workspace_path, rel_path)
+    if destination.exists():
+        destination.chmod(0o644)
+        destination.unlink()
+
+
 def _parse_work_root(value: str) -> WorkRoot:
     if "=" not in value:
         raise click.BadParameter("Expected id=path")
@@ -908,6 +1126,18 @@ def status_cmd() -> None:
     click.echo(f"head_state: [{version.review_state}/{version.retention_state}]")
     if version.message:
         click.echo(f"head_message: {version.message}")
+    state_path = _workspace_state_path(workspace_context.workspace_path)
+    if state_path.exists():
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise click.ClickException(
+                f"Invalid workspace state marker: {state_path}"
+            ) from exc
+        if state.get("schema") == 1 and state.get("repo_id") == config.repo_id:
+            click.echo(f"generation: {state.get('generation', 0)}")
+            click.echo(f"restored_from: {state.get('restored_from', '-')}")
+            click.echo(f"restore_journal: {state.get('restore_journal_id', '-')}")
 
 
 @main.command("reset")
@@ -956,6 +1186,284 @@ def reset_cmd(version: str, message: str) -> None:
     click.echo(f"new_head: {target.id}")
     click.echo("reset: moved")
     click.echo("workspace_files: unchanged")
+
+
+@main.command("restore")
+@click.argument("version")
+@click.option(
+    "--in-place",
+    "in_place",
+    is_flag=True,
+    help="Required. Rewrite the current workspace in place.",
+)
+@click.option(
+    "--plan",
+    is_flag=True,
+    help="Show the restore plan without changing files or metadata.",
+)
+@click.option(
+    "--confirm",
+    default="",
+    help="Required as RESTORE when executing an in-place restore.",
+)
+@click.option(
+    "--delete-missing",
+    is_flag=True,
+    help="Allow deletion of files present in the workspace but absent from the target version.",
+)
+def restore_cmd(
+    version: str,
+    in_place: bool,
+    plan: bool,
+    confirm: str,
+    delete_missing: bool,
+) -> None:
+    """Explicitly restore the current workspace to an older version."""
+    if not in_place:
+        raise click.ClickException("restore requires explicit --in-place")
+
+    config, metadata = _repo_from_cwd()
+    try:
+        workspace_context = _resolve_cli_workspace_context(config, Path.cwd())
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+    branch = workspace_context.default_branch
+    current_head = metadata.get_branch_head(branch)
+    if current_head is None:
+        raise click.ClickException(f"Current ref has no head version: {branch}")
+
+    current = metadata.get_version(current_head)
+    if current is None:
+        raise click.ClickException(f"Current head record is missing: {current_head}")
+    target = metadata.get_version(version)
+    if target is None:
+        raise click.ClickException(f"Version not found or ambiguous: {version}")
+    if target.retention_state != "resident":
+        raise click.ClickException(
+            "In-place restore currently requires a resident target version"
+        )
+    if current_head != target.id and not _is_ancestor_version(
+        metadata,
+        head_version_id=current_head,
+        target_version_id=target.id,
+    ):
+        raise click.ClickException(
+            "In-place restore currently supports only the current head or an ancestor"
+        )
+
+    current_refs = _dedupe_checkout_refs(metadata.get_file_refs(current.id))
+    target_refs = _dedupe_checkout_refs(metadata.get_file_refs(target.id))
+    dirty = _dirty_refs(workspace_context.workspace_path, current_refs)
+    if dirty:
+        _print_dirty_summary(dirty)
+        raise click.ClickException(
+            "Workspace is dirty; commit, clean, or recreate the workspace before restore"
+        )
+
+    restore_plan = _restore_plan(
+        workspace_path=workspace_context.workspace_path,
+        current_refs=current_refs,
+        target_refs=target_refs,
+    )
+    generation_current = _read_workspace_generation(
+        workspace_context.workspace_path,
+        config.repo_id,
+    )
+    generation_next = generation_current + 1
+
+    if plan:
+        _print_restore_plan(
+            branch_name=branch,
+            current_head=current_head,
+            target_version=target.id,
+            workspace_context=workspace_context,
+            generation_current=generation_current,
+            generation_next=generation_next,
+            plan=restore_plan,
+            delete_missing=delete_missing,
+            materialization="plan-only",
+        )
+        return
+
+    if int(restore_plan["delete"]) and not delete_missing:
+        _print_restore_plan(
+            branch_name=branch,
+            current_head=current_head,
+            target_version=target.id,
+            workspace_context=workspace_context,
+            generation_current=generation_current,
+            generation_next=generation_next,
+            plan=restore_plan,
+            delete_missing=delete_missing,
+            materialization="blocked",
+        )
+        raise click.ClickException(
+            "Restore would delete files; rerun with --delete-missing after reviewing the plan"
+        )
+    if confirm != "RESTORE":
+        _print_restore_plan(
+            branch_name=branch,
+            current_head=current_head,
+            target_version=target.id,
+            workspace_context=workspace_context,
+            generation_current=generation_current,
+            generation_next=generation_next,
+            plan=restore_plan,
+            delete_missing=delete_missing,
+            materialization="confirmation-required",
+        )
+        raise click.ClickException("In-place restore requires --confirm RESTORE")
+
+    missing, size_mismatch, hash_mismatch = _verify_file_refs(
+        config.cas_dir,
+        [(target.id, ref) for ref in target_refs],
+    )
+    if missing or size_mismatch or hash_mismatch:
+        _print_integrity_failures(
+            missing,
+            size_mismatch,
+            hash_mismatch,
+            include_version=True,
+        )
+        raise click.ClickException("Target version CAS integrity verification failed")
+
+    latest_head = metadata.get_branch_head(branch)
+    if latest_head != current_head:
+        raise click.ClickException(f"Branch head changed before restore: {branch}")
+
+    actor = getpass.getuser()
+    started_at = _utc_now()
+    journal_id = "r" + uuid.uuid4().hex[:12]
+    target_by_path = {ref.path: ref for ref in target_refs}
+    operations: list[dict[str, object]] = []
+    for op, paths in (
+        ("add", restore_plan["add_paths"]),
+        ("overwrite", restore_plan["overwrite_paths"]),
+        ("delete", restore_plan["delete_paths"]),
+    ):
+        for rel_path in paths:
+            ref = target_by_path.get(str(rel_path))
+            operations.append(
+                {
+                    "op": op,
+                    "path": rel_path,
+                    "status": "pending",
+                    "bytes": 0 if ref is None else ref.size,
+                    "cas_hash": "" if ref is None else ref.cas_hash,
+                }
+            )
+    journal: dict[str, object] = {
+        "schema": 1,
+        "journal_id": journal_id,
+        "repo_id": config.repo_id,
+        "branch": branch,
+        "old_head_version_id": current_head,
+        "target_version_id": target.id,
+        "workspace_id": workspace_context.workspace_id,
+        "workspace_path": str(workspace_context.workspace_path),
+        "generation": generation_next,
+        "actor": actor,
+        "started_at": started_at,
+        "finished_at": "",
+        "status": "running",
+        "plan": {
+            "add": restore_plan["add"],
+            "overwrite": restore_plan["overwrite"],
+            "delete": restore_plan["delete"],
+            "keep": restore_plan["keep"],
+            "changed_files": restore_plan["changed_files"],
+            "bytes": restore_plan["bytes"],
+            "delete_missing": delete_missing,
+        },
+        "operations": operations,
+    }
+    _write_restore_journal(config, journal)
+
+    try:
+        for index, operation in enumerate(operations):
+            operation["status"] = "running"
+            _write_restore_journal(config, journal)
+            op = str(operation["op"])
+            rel_path = str(operation["path"])
+            if op in {"add", "overwrite"}:
+                _restore_ref_from_cas(
+                    cas_root=config.cas_dir,
+                    workspace_path=workspace_context.workspace_path,
+                    ref=target_by_path[rel_path],
+                )
+            elif op == "delete":
+                _delete_restore_path(workspace_context.workspace_path, rel_path)
+            operations[index]["status"] = "done"
+            _write_restore_journal(config, journal)
+    except Exception as exc:
+        journal["status"] = "failed"
+        journal["finished_at"] = _utc_now()
+        journal["error"] = str(exc)
+        _write_restore_journal(config, journal)
+        raise
+
+    finished_at = _utc_now()
+    journal["status"] = "completed"
+    journal["finished_at"] = finished_at
+    _write_restore_journal(config, journal)
+
+    audit_plan = {
+        "add": restore_plan["add"],
+        "overwrite": restore_plan["overwrite"],
+        "delete": restore_plan["delete"],
+        "keep": restore_plan["keep"],
+        "changed_files": restore_plan["changed_files"],
+        "bytes": restore_plan["bytes"],
+        "delete_missing": delete_missing,
+    }
+    try:
+        metadata.record_restore(
+            branch=branch,
+            expected_old_head=current_head,
+            new_head=target.id,
+            journal_id=journal_id,
+            workspace_id=workspace_context.workspace_id,
+            workspace_path=str(workspace_context.workspace_path),
+            generation=generation_next,
+            actor=actor,
+            created_at=finished_at,
+            plan=audit_plan,
+        )
+    except ValueError as exc:
+        journal["status"] = "metadata_failed"
+        journal["error"] = str(exc)
+        _write_restore_journal(config, journal)
+        raise click.ClickException(str(exc)) from exc
+
+    _write_workspace_state(
+        workspace_path=workspace_context.workspace_path,
+        repo_id=config.repo_id,
+        branch_name=branch,
+        workspace_id=workspace_context.workspace_id,
+        generation=generation_next,
+        restored_from=target.id,
+        journal_id=journal_id,
+        actor=actor,
+        restored_at=finished_at,
+    )
+    _print_restore_plan(
+        branch_name=branch,
+        current_head=current_head,
+        target_version=target.id,
+        workspace_context=workspace_context,
+        generation_current=generation_current,
+        generation_next=generation_next,
+        plan=restore_plan,
+        delete_missing=delete_missing,
+        materialization="restored",
+        journal_id=journal_id,
+    )
+    click.echo("restore: completed")
+    click.echo(
+        "branch_head: "
+        + ("unchanged" if current_head == target.id else f"{current_head}->{target.id}")
+    )
+    click.echo("note: reopen files or restart EDA tools that may cache old content")
 
 
 @main.command("promote")

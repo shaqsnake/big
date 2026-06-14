@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、显式 `restore --in-place` 回到旧版本、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
@@ -200,7 +200,7 @@ big promote <version> --to Golden --confirm GOLDEN --message 'tapeout approved'
 
 ### 用例 4：查看和校验审计 hash-chain
 
-每次 `commit`、`branch create`、`reset`、`promote` 和 `lifecycle degrade` 都会追加一条本地 audit 事件，并用上一条事件 hash 串成链：
+每次 `commit`、`branch create`、`reset`、`restore`、`promote` 和 `lifecycle degrade` 都会追加一条本地 audit 事件，并用上一条事件 hash 串成链：
 
 ```bash
 big audit log --full
@@ -282,7 +282,46 @@ big reset <old-version>
 
 期望输出 `reset: no-op`。
 
-### 用例 7：验证两个工程师目录互相隔离
+### 用例 7：显式原地 restore 当前工作目录
+
+`big reset` 只移动 ref head，不改写文件；如果确实需要复用当前目录路径并把文件内容恢复到旧版本，必须显式执行 `big restore --in-place <version>`。
+
+当前原型的 restore 边界：
+
+- 只支持把当前 head 恢复到自身或祖先版本，不支持跨血缘原地改写。
+- 目标 version 必须是 `resident`；`recipe_only` 的降级物化仍通过 checkout 演示。
+- 会真实检测当前 head 的 tracked 文件 dirty state；dirty 时拒绝。
+- 尚未实现受管 lease 子系统，因此输出 `active_lease_check: not-implemented`，但仍要求用户用 `--confirm RESTORE` 表示已确认目录静默。
+- 使用同目录临时文件从 CAS copy-only 物化，校验后替换目标文件；同时写入 `.big/restore-journals/<journal>.json` 和当前 workspace 的 `.big-workspace.json`。
+
+建议先创建一个新版本，再恢复到旧版本：
+
+```bash
+printf '\n// restore demo\n' >> inputs/top.v
+printf '\nCOMPONENTS 1 ;\n' >> outputs/top_placed.def
+
+big commit --step place \
+  --inputs 'inputs/**;scripts/**' \
+  --outputs 'outputs/**;reports/**' \
+  --message 'restore demo modified snapshot'
+
+big restore --in-place <old-version> --plan
+big restore --in-place <old-version> --confirm RESTORE
+```
+
+期望：
+
+- `--plan` 输出 `current_head`、`target_version`、`generation_current`、`generation_next`
+- `--plan` 输出 `dirty: no`、`active_lease_check: not-implemented` 和 `quiet_state: required`
+- `--plan` 输出 `add`、`overwrite`、`delete`、`keep`、`changed_files` 和 `bytes`
+- 未提供 `--confirm RESTORE` 时不改写文件，并输出 `materialization: confirmation-required`
+- 执行成功后输出 `materialization: restored`、`restore: completed`、`journal: r...`
+- 如果目标版本需要删除当前目录中多余文件，默认拒绝；复核 plan 后可加 `--delete-missing`
+- `big status` 显示新的 `generation`、`restored_from` 和 `restore_journal`
+- `big branch events` 显示一条 `restore` 事件
+- 输出会提醒重新打开文件或重启可能缓存旧内容的 EDA 工具
+
+### 用例 8：验证两个工程师目录互相隔离
 
 进入另一个用户的同名 flow workspace：
 
@@ -312,7 +351,7 @@ big log
 - 显式执行 `big log workspace/default/alice/APR` 才会查看 `alice/APR` 的历史。
 - `big log main` 默认为空，除非你显式执行过 `big commit --branch main ...`。
 
-### 用例 8：将 Exploring version 标记为 recipe_only 并验证 inputs-only checkout
+### 用例 9：将 Exploring version 标记为 recipe_only 并验证 inputs-only checkout
 
 保持在 `shaqsnake/APR` workspace，使用刚才 shaqsnake 提交得到的 version ID。当前原型只允许把 `Exploring/resident` version 降级为 `recipe_only`；已经晋升到 `Candidate`、`Pinned` 或 `Golden` 的 version 不允许执行这个降级。
 
@@ -352,7 +391,7 @@ big checkout recipe/shaq
 - `.big-checkout.json` 中的 `materialization` 为 `partial`，并记录 `omitted_outputs`
 - 进入目标目录后执行 `big status`，会显示 `default_ref: recipe/shaq` 和 `head_state: [Exploring/recipe_only]`
 
-### 用例 9：从当前 workspace 创建命名 branch
+### 用例 10：从当前 workspace 创建命名 branch
 
 回到 alice 的 workspace：
 
@@ -395,7 +434,7 @@ big branch show workspace/default/alice/APR
 
 此时会额外显示 workspace-private ref。
 
-### 用例 10：checkout 目标路径、copy-only 物化和 shell 集成
+### 用例 11：checkout 目标路径、copy-only 物化和 shell 集成
 
 当前原型支持两步验证 checkout：先用 `--plan` 确认目标 branch、head version 和稳定目录路径；再执行不带 `--plan` 的 `big checkout <branch>`，把该 version 的 FileRef 从 CAS 复制到用户私有目标目录。CLI 子进程本身不能切换父 shell 的当前目录；未启用 shell 集成时，需要手工执行输出中的 `cd -- <target-path>`。启用 shell 集成后，wrapper 会在 checkout 成功物化或复用目录后自动进入目标目录。
 
@@ -504,6 +543,7 @@ pwd
 - `big audit log`
 - `big audit verify`
 - `big reset`
+- `big restore --in-place`
 - `big checkout <branch>`
 - `big checkout <branch> --plan`
 - `big checkout <branch> --print-path`
@@ -516,7 +556,6 @@ pwd
 
 暂未实现：
 
-- `big restore --in-place`
 - Linux groups 权限接入
 - 3DIC 多 work root checkout/restore 联动
 - recipe_only 的物理 GC、归档搬迁和远端召回

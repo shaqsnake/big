@@ -152,6 +152,7 @@ def ensure_repo_dirs(config: RepoConfig) -> None:
         config.big_dir / "metadata",
         config.staging_dir,
         config.big_dir / "locks",
+        config.big_dir / "restore-journals",
     ):
         path.mkdir(parents=True, exist_ok=True)
 
