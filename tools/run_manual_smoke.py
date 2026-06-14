@@ -107,6 +107,16 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     _expect_contains(shell_init, "big() {")
     _expect_contains(shell_init, "grep -q '^materialization: plan-only$'")
 
+    managed_run = _run_big(
+        ["run", "--", sys.executable, "-c", "print('managed smoke')"],
+        alice_workspace,
+        env,
+    )
+    _expect_contains(managed_run, "lease: l")
+    _expect_contains(managed_run, "managed smoke")
+    _expect_contains(managed_run, "exit_code: 0")
+    _expect_contains(managed_run, "lease_status: released")
+
     alice_commit = _run_big(
         [
             "commit",
@@ -160,6 +170,7 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     _expect_contains(restore_plan, f"target_version: {alice_version}")
     _expect_contains(restore_plan, "overwrite: 2")
     _expect_contains(restore_plan, "changed_files: 2")
+    _expect_contains(restore_plan, "active_lease_check: ok")
     _expect_contains(restore_plan, "materialization: plan-only")
 
     restore = _run_big(

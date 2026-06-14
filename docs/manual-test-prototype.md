@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、显式 `restore --in-place` 回到旧版本、restore 后继续 commit 并记录 provenance、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、验证 `big run` 受管 lease 创建与释放、alice 提交、显式 `restore --in-place` 回到旧版本、restore 后继续 commit 并记录 provenance、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
@@ -282,6 +282,21 @@ big reset <old-version>
 
 期望输出 `reset: no-op`。
 
+### 用例 6.5：受管执行命令并释放 lease
+
+`big run -- <command>` 用于让 BIG 启动并跟踪受控流程命令。当前原型会在命令运行期间写入 `.big/leases/<lease>.json`，命令退出后释放 lease；`big restore --in-place` 会拒绝同一 workspace 中仍处于 active 状态的受管 lease。直接从外部 shell 手工启动的 EDA 进程不会自动生成 lease，仍需要用户确认目录已经静默。
+
+```bash
+big run -- python -c 'print("managed smoke")'
+```
+
+期望：
+
+- 输出 `lease: l...`
+- 输出受管命令自身的内容，例如 `managed smoke`
+- 输出 `exit_code: 0`
+- 输出 `lease_status: released`
+
 ### 用例 7：显式原地 restore 当前工作目录
 
 `big reset` 只移动 ref head，不改写文件；如果确实需要复用当前目录路径并把文件内容恢复到旧版本，必须显式执行 `big restore --in-place <version>`。
@@ -291,7 +306,8 @@ big reset <old-version>
 - 只支持把当前 head 恢复到自身或祖先版本，不支持跨血缘原地改写。
 - 目标 version 必须是 `resident`；`recipe_only` 的降级物化仍通过 checkout 演示。
 - 会真实检测当前 head 的 tracked 文件 dirty state；dirty 时拒绝。
-- 尚未实现受管 lease 子系统，因此输出 `active_lease_check: not-implemented`，但仍要求用户用 `--confirm RESTORE` 表示已确认目录静默。
+- 会检测 `big run` 创建的活动受管 lease；存在 active lease 时拒绝 restore，并输出 lease owner、host、pid、命令摘要和建议。
+- 手工从外部 shell 直接启动的 EDA 写入进程不会自动生成 lease，仍需要用户用 `--confirm RESTORE` 表示已确认目录静默。
 - 使用同目录临时文件从 CAS copy-only 物化，校验后替换目标文件；同时写入 `.big/restore-journals/<journal>.json` 和当前 workspace 的 `.big-workspace.json`。
 
 建议先创建一个新版本，再恢复到旧版本：
@@ -312,7 +328,7 @@ big restore --in-place <old-version> --confirm RESTORE
 期望：
 
 - `--plan` 输出 `current_head`、`target_version`、`generation_current`、`generation_next`
-- `--plan` 输出 `dirty: no`、`active_lease_check: not-implemented` 和 `quiet_state: required`
+- `--plan` 输出 `dirty: no`、`active_lease_check: ok` 和 `quiet_state: required`
 - `--plan` 输出 `add`、`overwrite`、`delete`、`keep`、`changed_files` 和 `bytes`
 - 未提供 `--confirm RESTORE` 时不改写文件，并输出 `materialization: confirmation-required`
 - 执行成功后输出 `materialization: restored`、`restore: completed`、`journal: r...`
@@ -552,6 +568,7 @@ pwd
 - `big repo verify`
 - `big status`
 - `big repo init --work-root id=path` 创建 3DIC 指针型 work root 配置
+- `big run -- <command>`
 - `big commit`
 - `big log`
 - `big lineage`

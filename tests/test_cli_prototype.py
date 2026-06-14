@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sqlite3
+import sys
 from pathlib import Path
 
 from click.testing import CliRunner
@@ -633,6 +634,40 @@ def test_audit_verify_detects_tampered_event(tmp_path: Path) -> None:
         os.chdir(old_cwd)
 
 
+def test_run_creates_and_releases_managed_lease(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        result = runner.invoke(
+            main,
+            [
+                "run",
+                "--",
+                sys.executable,
+                "-c",
+                "print('managed ok')",
+            ],
+        )
+        assert result.exit_code == 0, result.output
+        assert "lease: l" in result.output
+        assert "branch: workspace/default/alice/APR" in result.output
+        assert "workspace: user/alice/APR" in result.output
+        assert "managed ok" in result.output
+        assert "exit_code: 0" in result.output
+        assert "lease_status: released" in result.output
+        assert list((repo_root / ".big" / "leases").glob("*.json")) == []
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_restore_in_place_rewrites_clean_workspace_with_journal(
     tmp_path: Path,
 ) -> None:
@@ -705,7 +740,7 @@ def test_restore_in_place_rewrites_clean_workspace_with_journal(
         assert "generation_current: 0" in plan.output
         assert "generation_next: 1" in plan.output
         assert "dirty: no" in plan.output
-        assert "active_lease_check: not-implemented" in plan.output
+        assert "active_lease_check: ok" in plan.output
         assert "quiet_state: required" in plan.output
         assert "add: 0" in plan.output
         assert "overwrite: 2" in plan.output
@@ -715,6 +750,37 @@ def test_restore_in_place_rewrites_clean_workspace_with_journal(
         assert "journal: plan-only" in plan.output
         assert "materialization: plan-only" in plan.output
         assert (workspace / "inputs" / "top.v").read_text(encoding="utf-8") == top_v2
+
+        lease_dir = repo_root / ".big" / "leases"
+        lease_dir.mkdir(parents=True, exist_ok=True)
+        active_lease = {
+            "schema": 1,
+            "lease_id": "ltestactive",
+            "repo_id": "DemoChip",
+            "branch": "workspace/default/alice/APR",
+            "workspace_id": "user/alice/APR",
+            "workspace_path": str(workspace),
+            "actor": "alice",
+            "host": "test-host",
+            "child_pid": 12345,
+            "command": ["pds_innovus", "place"],
+            "started_at": "2026-06-14T00:00:00+00:00",
+            "status": "active",
+        }
+        (lease_dir / "ltestactive.json").write_text(
+            json.dumps(active_lease, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        blocked_by_lease = runner.invoke(
+            main, ["restore", first_version.group(1), "--in-place", "--plan"]
+        )
+        assert blocked_by_lease.exit_code != 0
+        assert "active_lease_check: failed" in blocked_by_lease.output
+        assert "active_leases: 1" in blocked_by_lease.output
+        assert "ltestactive" in blocked_by_lease.output
+        assert "command=pds_innovus place" in blocked_by_lease.output
+        assert "Active managed lease exists" in blocked_by_lease.output
+        (lease_dir / "ltestactive.json").unlink()
 
         no_confirm = runner.invoke(
             main, ["restore", first_version.group(1), "--in-place"]

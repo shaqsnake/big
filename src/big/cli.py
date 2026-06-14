@@ -6,9 +6,13 @@ import getpass
 import glob
 import hashlib
 import json
+import os
 from pathlib import Path
+import platform
 import re
+import shlex
 import shutil
+import subprocess
 import uuid
 
 import click
@@ -523,6 +527,98 @@ def _write_workspace_state(
     )
 
 
+def _lease_dir(config: RepoConfig) -> Path:
+    return config.big_dir / "leases"
+
+
+def _lease_path(config: RepoConfig, lease_id: str) -> Path:
+    return _lease_dir(config) / f"{lease_id}.json"
+
+
+def _write_lease(config: RepoConfig, lease: dict[str, object]) -> None:
+    path = _lease_path(config, str(lease["lease_id"]))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.parent / f".{path.name}.{uuid.uuid4().hex}.tmp"
+    temp_path.write_text(json.dumps(lease, indent=2, sort_keys=True), encoding="utf-8")
+    try:
+        temp_path.replace(path)
+    except OSError:
+        shutil.copyfile(temp_path, path)
+        temp_path.unlink(missing_ok=True)
+
+
+def _remove_lease(config: RepoConfig, lease_id: str) -> None:
+    _lease_path(config, lease_id).unlink(missing_ok=True)
+
+
+def _lease_command_summary(lease: dict[str, object]) -> str:
+    command = lease.get("command", [])
+    if isinstance(command, list):
+        return shlex.join(str(item) for item in command)
+    return str(command)
+
+
+def _active_managed_leases(
+    config: RepoConfig,
+    workspace_context: WorkspaceContext,
+    branch: str,
+) -> list[tuple[Path, dict[str, object]]]:
+    leases: list[tuple[Path, dict[str, object]]] = []
+    lease_dir = _lease_dir(config)
+    if not lease_dir.exists():
+        return leases
+
+    workspace_path = workspace_context.workspace_path.resolve()
+    for path in sorted(lease_dir.glob("*.json")):
+        try:
+            lease = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise click.ClickException(f"Invalid managed lease file: {path}") from exc
+
+        if (
+            lease.get("schema") != 1
+            or lease.get("repo_id") != config.repo_id
+            or lease.get("status") != "active"
+        ):
+            continue
+
+        lease_workspace = str(lease.get("workspace_path", ""))
+        workspace_matches = False
+        if lease_workspace:
+            try:
+                workspace_matches = Path(lease_workspace).resolve() == workspace_path
+            except OSError:
+                workspace_matches = False
+        identity_matches = (
+            lease.get("branch") == branch
+            and lease.get("workspace_id") == workspace_context.workspace_id
+        )
+        if workspace_matches or identity_matches:
+            leases.append((path, lease))
+
+    return leases
+
+
+def _print_active_lease_summary(
+    leases: list[tuple[Path, dict[str, object]]],
+) -> None:
+    click.echo("active_lease_check: failed")
+    click.echo(f"active_leases: {len(leases)}")
+    for _, lease in leases[:10]:
+        click.echo(
+            "  "
+            f"{lease.get('lease_id', '-')} "
+            f"actor={lease.get('actor', '-')} "
+            f"host={lease.get('host', '-')} "
+            f"pid={lease.get('child_pid') or lease.get('runner_pid') or '-'} "
+            f"started_at={lease.get('started_at', '-')} "
+            f"command={_lease_command_summary(lease)}"
+        )
+    if len(leases) > 10:
+        click.echo(f"  ... {len(leases) - 10} more")
+    click.echo("suggestion: wait for managed commands to finish before restore")
+
+
 def _workspace_internal_path(rel_path: str) -> bool:
     parts = Path(rel_path).parts
     return (
@@ -623,6 +719,7 @@ def _print_restore_plan(
     delete_missing: bool,
     materialization: str,
     journal_id: str | None = None,
+    active_lease_check: str = "ok",
 ) -> None:
     click.echo(f"branch: {branch_name}")
     click.echo(f"current_head: {current_head}")
@@ -632,7 +729,7 @@ def _print_restore_plan(
     click.echo(f"generation_current: {generation_current}")
     click.echo(f"generation_next: {generation_next}")
     click.echo("dirty: no")
-    click.echo("active_lease_check: not-implemented")
+    click.echo(f"active_lease_check: {active_lease_check}")
     click.echo(
         "quiet_state: user-confirmed" if materialization == "restored" else "quiet_state: required"
     )
@@ -1171,6 +1268,82 @@ def status_cmd() -> None:
             click.echo(f"restore_journal: {state.get('restore_journal_id', '-')}")
 
 
+@main.command(
+    "run",
+    context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
+)
+@click.argument("command_args", nargs=-1, type=click.UNPROCESSED, required=True)
+def run_cmd(command_args: tuple[str, ...]) -> None:
+    """Run a command under a managed workspace lease."""
+    workspace = Path.cwd().resolve()
+    config, _ = _repo_from_cwd()
+    try:
+        workspace_context = _resolve_cli_workspace_context(config, workspace)
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    branch = workspace_context.default_branch
+    lease_id = "l" + uuid.uuid4().hex[:12]
+    lease = {
+        "schema": 1,
+        "lease_id": lease_id,
+        "repo_id": config.repo_id,
+        "branch": branch,
+        "workspace_id": workspace_context.workspace_id,
+        "workspace_path": str(workspace_context.workspace_path),
+        "work_root_id": workspace_context.work_root.id,
+        "user": workspace_context.user,
+        "flow": workspace_context.flow,
+        "actor": getpass.getuser(),
+        "host": platform.node(),
+        "runner_pid": os.getpid(),
+        "child_pid": 0,
+        "command": list(command_args),
+        "started_at": _utc_now(),
+        "status": "active",
+    }
+
+    click.echo(f"lease: {lease_id}")
+    click.echo(f"branch: {branch}")
+    click.echo(f"workspace: {workspace_context.workspace_id}")
+    click.echo(f"command: {_lease_command_summary(lease)}")
+
+    returncode = 1
+    _write_lease(config, lease)
+    try:
+        try:
+            process = subprocess.Popen(
+                list(command_args),
+                cwd=workspace,
+                text=True,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+        except OSError as exc:
+            raise click.ClickException(f"Failed to start managed command: {exc}") from exc
+
+        lease["child_pid"] = process.pid
+        _write_lease(config, lease)
+        stdout, stderr = process.communicate()
+        if stdout:
+            click.echo(stdout, nl=False)
+            if not stdout.endswith(("\n", "\r")):
+                click.echo()
+        if stderr:
+            click.echo(stderr, nl=False, err=True)
+            if not stderr.endswith(("\n", "\r")):
+                click.echo(err=True)
+        returncode = process.returncode
+    finally:
+        _remove_lease(config, lease_id)
+        click.echo(f"exit_code: {returncode}")
+        click.echo("lease_status: released")
+
+    if returncode != 0:
+        raise click.exceptions.Exit(returncode)
+
+
 @main.command("reset")
 @click.argument("version")
 @click.option("--message", "-m", default="", help="Reason for the branch pointer reset.")
@@ -1289,6 +1462,13 @@ def restore_cmd(
         _print_dirty_summary(dirty)
         raise click.ClickException(
             "Workspace is dirty; commit, clean, or recreate the workspace before restore"
+        )
+
+    active_leases = _active_managed_leases(config, workspace_context, branch)
+    if active_leases:
+        _print_active_lease_summary(active_leases)
+        raise click.ClickException(
+            "Active managed lease exists; wait for big run to finish before restore"
         )
 
     restore_plan = _restore_plan(
