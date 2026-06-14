@@ -26,6 +26,9 @@ class VersionRecord:
     workspace_id: str = ""
     user_name: str = ""
     flow: str = ""
+    restored_from_version_id: str = ""
+    restore_journal_id: str = ""
+    workspace_generation: int = 0
 
 
 @dataclass(frozen=True)
@@ -170,7 +173,10 @@ class SQLiteMetadataRepository(MetadataRepository):
                     work_root_id TEXT NOT NULL DEFAULT '',
                     workspace_id TEXT NOT NULL DEFAULT '',
                     user_name TEXT NOT NULL DEFAULT '',
-                    flow TEXT NOT NULL DEFAULT ''
+                    flow TEXT NOT NULL DEFAULT '',
+                    restored_from_version_id TEXT NOT NULL DEFAULT '',
+                    restore_journal_id TEXT NOT NULL DEFAULT '',
+                    workspace_generation INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS file_refs (
@@ -259,6 +265,24 @@ class SQLiteMetadataRepository(MetadataRepository):
             _ensure_column(conn, "versions", "workspace_id", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "versions", "user_name", "TEXT NOT NULL DEFAULT ''")
             _ensure_column(conn, "versions", "flow", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(
+                conn,
+                "versions",
+                "restored_from_version_id",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            _ensure_column(
+                conn,
+                "versions",
+                "restore_journal_id",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            _ensure_column(
+                conn,
+                "versions",
+                "workspace_generation",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
 
     def get_branch_head(self, branch: str) -> str | None:
         with self.connect() as conn:
@@ -757,8 +781,10 @@ class SQLiteMetadataRepository(MetadataRepository):
                 INSERT INTO versions(
                     id, branch, parent_id, step, message, author, created_at,
                     recipe_hash, manifest_hash, capture_mode, review_state,
-                    retention_state, work_root_id, workspace_id, user_name, flow
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    retention_state, work_root_id, workspace_id, user_name, flow,
+                    restored_from_version_id, restore_journal_id,
+                    workspace_generation
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record.id,
@@ -777,6 +803,9 @@ class SQLiteMetadataRepository(MetadataRepository):
                     record.workspace_id,
                     record.user_name,
                     record.flow,
+                    record.restored_from_version_id,
+                    record.restore_journal_id,
+                    record.workspace_generation,
                 ),
             )
             conn.executemany(
@@ -821,6 +850,9 @@ class SQLiteMetadataRepository(MetadataRepository):
                     "review_state": record.review_state,
                     "retention_state": record.retention_state,
                     "workspace_id": record.workspace_id,
+                    "restored_from_version_id": record.restored_from_version_id,
+                    "restore_journal_id": record.restore_journal_id,
+                    "workspace_generation": record.workspace_generation,
                     "input_count": sum(1 for item in file_refs if item.role == "input"),
                     "output_count": sum(1 for item in file_refs if item.role == "output"),
                 },
@@ -933,6 +965,9 @@ def _version_from_row(row: sqlite3.Row) -> VersionRecord:
         workspace_id=_row_value(row, "workspace_id"),
         user_name=_row_value(row, "user_name"),
         flow=_row_value(row, "flow"),
+        restored_from_version_id=_row_value(row, "restored_from_version_id"),
+        restore_journal_id=_row_value(row, "restore_journal_id"),
+        workspace_generation=int(_row_value(row, "workspace_generation", "0") or 0),
     )
 
 

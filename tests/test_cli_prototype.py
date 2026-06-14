@@ -784,10 +784,72 @@ def test_restore_in_place_rewrites_clean_workspace_with_journal(
         assert f"restored_from: {first_version.group(1)}" in status.output
         assert f"restore_journal: {journal.group(1)}" in status.output
 
+        _write(workspace / "reports" / "place.rpt", "wns 0.02\n")
+        post_restore_commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**;scripts/**",
+                "--outputs",
+                "outputs/**;reports/**",
+                "--message",
+                "continue after restore",
+            ],
+        )
+        assert post_restore_commit.exit_code == 0, post_restore_commit.output
+        post_restore_version = re.search(
+            r"version: (v[0-9a-f]+)", post_restore_commit.output
+        )
+        assert post_restore_version
+        assert f"restored_from: {first_version.group(1)}" in post_restore_commit.output
+        assert f"restore_journal: {journal.group(1)}" in post_restore_commit.output
+        assert "workspace_generation: 1" in post_restore_commit.output
+
+        config, _ = find_config(workspace)
+        post_record = SQLiteMetadataRepository(config.metadata_db).get_version(
+            post_restore_version.group(1)
+        )
+        assert post_record is not None
+        assert post_record.parent_id == first_version.group(1)
+        assert post_record.restored_from_version_id == first_version.group(1)
+        assert post_record.restore_journal_id == journal.group(1)
+        assert post_record.workspace_generation == 1
+
+        post_show = runner.invoke(main, ["show", post_restore_version.group(1)])
+        assert post_show.exit_code == 0, post_show.output
+        assert f"restored_from: {first_version.group(1)}" in post_show.output
+        assert f"restore_journal: {journal.group(1)}" in post_show.output
+        assert "workspace_generation: 1" in post_show.output
+
+        status_after_commit = runner.invoke(main, ["status"])
+        assert status_after_commit.exit_code == 0, status_after_commit.output
+        assert f"head: {post_restore_version.group(1)}" in status_after_commit.output
+        assert f"head_restored_from: {first_version.group(1)}" in status_after_commit.output
+        assert f"head_restore_journal: {journal.group(1)}" in status_after_commit.output
+
+        branch_show = runner.invoke(main, ["branch", "show", "workspace/default/alice/APR"])
+        assert branch_show.exit_code == 0, branch_show.output
+        assert f"head_restored_from: {first_version.group(1)}" in branch_show.output
+        assert f"head_restore_journal: {journal.group(1)}" in branch_show.output
+
         log = runner.invoke(main, ["log"])
         assert log.exit_code == 0, log.output
+        assert post_restore_version.group(1) in log.output
         assert first_version.group(1) in log.output
         assert second_version.group(1) not in log.output
+
+        log_verbose = runner.invoke(main, ["log", "--verbose"])
+        assert log_verbose.exit_code == 0, log_verbose.output
+        assert f"  restored_from: {first_version.group(1)}" in log_verbose.output
+        assert f"  restore_journal: {journal.group(1)}" in log_verbose.output
+
+        lineage = runner.invoke(main, ["lineage", post_restore_version.group(1)])
+        assert lineage.exit_code == 0, lineage.output
+        assert f"restored_from: {first_version.group(1)}" in lineage.output
+        assert f"restore_journal: {journal.group(1)}" in lineage.output
 
         branch_events = runner.invoke(main, ["branch", "events"])
         assert branch_events.exit_code == 0, branch_events.output
@@ -799,12 +861,15 @@ def test_restore_in_place_rewrites_clean_workspace_with_journal(
 
         audit_verify = runner.invoke(main, ["audit", "verify"])
         assert audit_verify.exit_code == 0, audit_verify.output
-        assert "events: 3" in audit_verify.output
+        assert "events: 4" in audit_verify.output
         assert "integrity: ok" in audit_verify.output
 
-        audit_log = runner.invoke(main, ["audit", "log", "--limit", "5"])
+        audit_log = runner.invoke(main, ["audit", "log", "--limit", "5", "--full"])
         assert audit_log.exit_code == 0, audit_log.output
+        assert f"commit version {post_restore_version.group(1)}" in audit_log.output
         assert "restore workspace user/alice/APR" in audit_log.output
+        assert f'"restored_from_version_id":"{first_version.group(1)}"' in audit_log.output
+        assert f'"restore_journal_id":"{journal.group(1)}"' in audit_log.output
     finally:
         os.chdir(old_cwd)
 

@@ -31,8 +31,8 @@ context:
 - Then 脚本重建 `manual-lab/data/WslChip` 并完成 repo init。
 
 - Given alice 的 APR workspace
-- When smoke 执行 shell-init、commit、restore plan、restore execute、lineage、promote、branch create、branch checkout、`--print-path`、历史版本 `--new-branch` checkout
-- Then restore 将 alice workspace 从第二个版本恢复到第一个版本，并写入 generation 与 restore journal；checkout 目录被创建，文件内容可读；进入 checkout 目录后 `status/log` 默认指向对应分支；再次 checkout 输出 `materialization: reused`。
+- When smoke 执行 shell-init、commit、restore plan、restore execute、restore 后继续 commit、lineage、promote、branch create、branch checkout、`--print-path`、历史版本 `--new-branch` checkout
+- Then restore 将 alice workspace 从第二个版本恢复到第一个版本，并写入 generation 与 restore journal；restore 后的新 commit 记录 `restored_from` 和 `restore_journal` provenance；checkout 目录被创建，文件内容可读；进入 checkout 目录后 `status/log` 默认指向对应分支；再次 checkout 输出 `materialization: reused`。
 
 - Given shaqsnake 的 APR workspace
 - When smoke 执行独立 commit、log、recipe_only 降级和 `recipe/shaq` checkout
@@ -40,9 +40,9 @@ context:
 
 - Given smoke 完成
 - When 查看 repo stats
-- Then `big repo verify` 输出 `integrity: ok`，repo stats 输出 3 个 version、15 个 file_ref、6 个唯一引用对象和 6 个 CAS 对象。
-- And repo stats 的 review 分布包含 `Candidate: versions=1` 和 `Exploring: versions=2`，retention 分布包含 `resident: versions=2` 和 `recipe_only: versions=1`。
+- Then `big repo verify` 输出 `integrity: ok`，repo stats 输出 4 个 version、20 个 file_ref、6 个唯一引用对象和 6 个 CAS 对象。
+- And repo stats 的 review 分布包含 `Candidate: versions=1` 和 `Exploring: versions=3`，retention 分布包含 `resident: versions=3` 和 `recipe_only: versions=1`。
 
 - Given smoke 完成
 - When 执行 `big audit verify`
-- Then 输出 `events: 9` 和 `integrity: ok`。
+- Then 输出 `events: 10` 和 `integrity: ok`。

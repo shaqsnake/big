@@ -15,7 +15,7 @@ context:
 
 **问题：** MVP 规划要求 checkout 和 reset 都不得隐式改写源工作目录；只有用户显式执行 `big restore --in-place <version>` 时，才允许在确认 quiet state 后受控恢复当前稳定目录。原型之前只有 pointer-only `reset` 和 copy-only checkout，缺少可验证的 restore 边界、dirty 检查和 restore journal。
 
-**方案：** 增加 `big restore <version> --in-place`。命令解析当前 workspace-private 或 checkout branch，要求目标 version 为当前 head 或其祖先且 `retention_state=resident`；先校验当前 head 的 tracked 文件没有 dirty state，再生成 restore plan。执行时必须传入 `--confirm RESTORE`，使用同目录临时文件从 CAS copy-only 物化并校验，逐文件替换，写入 `.big/restore-journals/<journal>.json`、`.big-workspace.json`、branch event 和 audit hash-chain。
+**方案：** 增加 `big restore <version> --in-place`。命令解析当前 workspace-private 或 checkout branch，要求目标 version 为当前 head 或其祖先且 `retention_state=resident`；先校验当前 head 的 tracked 文件没有 dirty state，再生成 restore plan。执行时必须传入 `--confirm RESTORE`，使用同目录临时文件从 CAS copy-only 物化并校验，逐文件替换，写入 `.big/restore-journals/<journal>.json`、`.big-workspace.json`、branch event 和 audit hash-chain。后续 `big commit` 会读取 workspace state，把 `restored_from`、`restore_journal_id` 和 `workspace_generation` 写入 version provenance。
 
 ## Boundaries
 
@@ -47,6 +47,10 @@ context:
 - Given restore 成功完成
 - When 执行 `big status`、`big branch events`、`big audit verify`
 - Then status 显示 `generation`、`restored_from`、`restore_journal`；branch events 显示 restore 事件；audit hash-chain 校验通过。
+
+- Given restore 成功完成后用户继续提交新版本
+- When 执行 `big commit`
+- Then 新 version 记录 `restored_from_version_id`、`restore_journal_id` 和 `workspace_generation`，并可通过 `big show`、`big log --verbose`、`big lineage`、`big status` 和 `big branch show` 查看。
 
 ## Verification
 

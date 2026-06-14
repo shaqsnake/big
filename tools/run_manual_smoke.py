@@ -124,6 +124,7 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     )
     alice_version = _version_from(alice_commit)
     _expect_contains(alice_commit, "branch: workspace/default/alice/APR")
+    alice_restored_from_version = alice_version
 
     (alice_workspace / "inputs" / "top.v").write_text(
         "module top;\nwire smoke_restore;\nendmodule\n",
@@ -180,10 +181,37 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     _expect_contains(restore_status, "generation: 1")
     _expect_contains(restore_status, f"restored_from: {alice_version}")
 
+    alice_post_restore_commit = _run_big(
+        [
+            "commit",
+            "--step",
+            "place",
+            "--inputs",
+            "inputs/**;scripts/**",
+            "--outputs",
+            "outputs/**;reports/**",
+            "--message",
+            "alice continue after restore",
+        ],
+        alice_workspace,
+        env,
+    )
+    alice_version = _version_from(alice_post_restore_commit)
+    _expect_contains(
+        alice_post_restore_commit,
+        f"restored_from: {alice_restored_from_version}",
+    )
+    _expect_contains(alice_post_restore_commit, "workspace_generation: 1")
+
     alice_lineage = _run_big(["lineage", alice_version], alice_workspace, env)
-    _expect_contains(alice_lineage, "entries: 1")
+    _expect_contains(alice_lineage, "entries: 2")
     _expect_contains(alice_lineage, "truncated: no")
-    _expect_contains(alice_lineage, f"0 {alice_version} parent=-")
+    _expect_contains(
+        alice_lineage,
+        f"0 {alice_version} parent={alice_restored_from_version}",
+    )
+    _expect_contains(alice_lineage, f"restored_from: {alice_restored_from_version}")
+    _expect_contains(alice_lineage, f"1 {alice_restored_from_version} parent=-")
 
     alice_promote = _run_big(
         [
@@ -353,29 +381,30 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     _expect_contains(main_log, "No versions visible on branch main.")
 
     repo_verify = _run_big(["repo", "verify"], alice_workspace, env)
-    _expect_contains(repo_verify, "versions: 3")
-    _expect_contains(repo_verify, "file_refs: 15")
+    _expect_contains(repo_verify, "versions: 4")
+    _expect_contains(repo_verify, "file_refs: 20")
     _expect_contains(repo_verify, "integrity: ok")
 
     stats = _run_big(["repo", "stats"], alice_workspace, env)
-    _expect_contains(stats, "versions: 3")
-    _expect_contains(stats, "file_refs: 15")
+    _expect_contains(stats, "versions: 4")
+    _expect_contains(stats, "file_refs: 20")
     _expect_contains(stats, "unique_referenced_objects: 6")
     _expect_contains(stats, "cas_objects: 6")
     _expect_contains(stats, "review:")
     _expect_contains(stats, "Candidate: versions=1")
-    _expect_contains(stats, "Exploring: versions=2")
+    _expect_contains(stats, "Exploring: versions=3")
     _expect_contains(stats, "retention:")
-    _expect_contains(stats, "resident: versions=2")
+    _expect_contains(stats, "resident: versions=3")
     _expect_contains(stats, "recipe_only: versions=1")
 
     audit_verify = _run_big(["audit", "verify"], alice_workspace, env)
-    _expect_contains(audit_verify, "events: 9")
+    _expect_contains(audit_verify, "events: 10")
     _expect_contains(audit_verify, "integrity: ok")
 
-    audit_log = _run_big(["audit", "log", "--limit", "9"], alice_workspace, env)
+    audit_log = _run_big(["audit", "log", "--limit", "10"], alice_workspace, env)
     _expect_contains(audit_log, f"commit version {shaq_version}")
     _expect_contains(audit_log, f"commit version {alice_modified_version}")
+    _expect_contains(audit_log, f"commit version {alice_version}")
     _expect_contains(audit_log, "restore workspace user/alice/APR")
     _expect_contains(audit_log, f"degrade version {shaq_version}")
     _expect_contains(audit_log, f"promote version {alice_version}")

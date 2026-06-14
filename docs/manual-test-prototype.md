@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、显式 `restore --in-place` 回到旧版本、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、alice 提交、显式 `restore --in-place` 回到旧版本、restore 后继续 commit 并记录 provenance、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
@@ -320,6 +320,27 @@ big restore --in-place <old-version> --confirm RESTORE
 - `big status` 显示新的 `generation`、`restored_from` 和 `restore_journal`
 - `big branch events` 显示一条 `restore` 事件
 - 输出会提醒重新打开文件或重启可能缓存旧内容的 EDA 工具
+
+restore 后继续提交：
+
+```bash
+big commit --step place \
+  --inputs 'inputs/**;scripts/**' \
+  --outputs 'outputs/**;reports/**' \
+  --message 'continue after restore'
+
+big show <new-version>
+big log --verbose
+big lineage <new-version>
+```
+
+期望：
+
+- `big commit` 输出 `restored_from: <old-version>`
+- `big commit` 输出 `restore_journal: r...`
+- `big commit` 输出 `workspace_generation: ...`
+- `big show`、`big log --verbose` 和 `big lineage` 都可以看到该 version 的 restore provenance
+- `big status` 和 `big branch show <branch>` 对当前 head 也会显示 `head_restored_from` 与 `head_restore_journal`
 
 ### 用例 8：验证两个工程师目录互相隔离
 

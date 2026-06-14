@@ -468,6 +468,33 @@ def _read_workspace_generation(workspace_path: Path, repo_id: str) -> int:
         raise click.ClickException(f"Invalid workspace generation: {state_path}") from exc
 
 
+def _read_workspace_restore_provenance(
+    workspace_path: Path,
+    repo_id: str,
+    branch_name: str,
+) -> tuple[str, str, int]:
+    state_path = _workspace_state_path(workspace_path)
+    if not state_path.exists():
+        return "", "", 0
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise click.ClickException(f"Invalid workspace state marker: {state_path}") from exc
+    if state.get("schema") != 1 or state.get("repo_id") != repo_id:
+        raise click.ClickException(f"Workspace state marker does not match repo: {state_path}")
+    if state.get("branch") != branch_name:
+        return "", "", 0
+    try:
+        generation = int(state.get("generation", 0))
+    except (TypeError, ValueError) as exc:
+        raise click.ClickException(f"Invalid workspace generation: {state_path}") from exc
+    return (
+        str(state.get("restored_from", "")),
+        str(state.get("restore_journal_id", "")),
+        generation,
+    )
+
+
 def _write_workspace_state(
     workspace_path: Path,
     repo_id: str,
@@ -1126,6 +1153,10 @@ def status_cmd() -> None:
     click.echo(f"head_state: [{version.review_state}/{version.retention_state}]")
     if version.message:
         click.echo(f"head_message: {version.message}")
+    if version.restored_from_version_id:
+        click.echo(f"head_restored_from: {version.restored_from_version_id}")
+        click.echo(f"head_restore_journal: {version.restore_journal_id}")
+        click.echo(f"head_workspace_generation: {version.workspace_generation}")
     state_path = _workspace_state_path(workspace_context.workspace_path)
     if state_path.exists():
         try:
@@ -1783,6 +1814,10 @@ def branch_show_cmd(branch_name: str) -> None:
     click.echo(f"head_step: {version.step}")
     click.echo(f"head_workspace: {version.workspace_id or '-'}")
     click.echo(f"head_state: [{version.review_state}/{version.retention_state}]")
+    if version.restored_from_version_id:
+        click.echo(f"head_restored_from: {version.restored_from_version_id}")
+        click.echo(f"head_restore_journal: {version.restore_journal_id}")
+        click.echo(f"head_workspace_generation: {version.workspace_generation}")
     if version.message:
         click.echo(f"head_message: {version.message}")
 
@@ -1826,6 +1861,13 @@ def commit_cmd(
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     branch = branch or workspace_context.default_branch
+    restored_from, restore_journal_id, workspace_generation = (
+        _read_workspace_restore_provenance(
+            workspace_path=workspace_context.workspace_path,
+            repo_id=config.repo_id,
+            branch_name=branch,
+        )
+    )
     inputs = _resolve_patterns(input_patterns, workspace, "input")
     outputs = _resolve_patterns(output_patterns, workspace, "output")
 
@@ -1878,6 +1920,9 @@ def commit_cmd(
         workspace_id=workspace_context.workspace_id,
         user_name=workspace_context.user,
         flow=workspace_context.flow,
+        restored_from_version_id=restored_from,
+        restore_journal_id=restore_journal_id,
+        workspace_generation=workspace_generation,
     )
     metadata.create_version(record, all_refs)
     shutil.rmtree(staging_root, ignore_errors=True)
@@ -1891,6 +1936,10 @@ def commit_cmd(
     click.echo(f"recipe_hash: {_short_hash(recipe_hash)}")
     click.echo(f"capture_mode: {record.capture_mode}")
     click.echo(f"state: [{record.review_state}/{record.retention_state}]")
+    if record.restored_from_version_id:
+        click.echo(f"restored_from: {record.restored_from_version_id}")
+        click.echo(f"restore_journal: {record.restore_journal_id}")
+        click.echo(f"workspace_generation: {record.workspace_generation}")
     if verbose:
         click.echo(
             f"work_root: {workspace_context.work_root.id} "
@@ -1927,6 +1976,10 @@ def log_cmd(branch: str | None, limit: int, verbose: bool) -> None:
         if verbose:
             click.echo(f"  parent: {item.parent_id or '-'}")
             click.echo(f"  workspace: {item.workspace_id or '-'}")
+            if item.restored_from_version_id:
+                click.echo(f"  restored_from: {item.restored_from_version_id}")
+                click.echo(f"  restore_journal: {item.restore_journal_id}")
+                click.echo(f"  workspace_generation: {item.workspace_generation}")
             click.echo(f"  recipe_hash: {_short_hash(item.recipe_hash)}")
             click.echo(f"  capture_mode: {item.capture_mode}")
 
@@ -1954,6 +2007,10 @@ def show_cmd(version: str, verbose: bool, show_full: bool) -> None:
     click.echo(f"created_at: {record.created_at}")
     if record.workspace_id:
         click.echo(f"workspace: {record.workspace_id}")
+    if record.restored_from_version_id:
+        click.echo(f"restored_from: {record.restored_from_version_id}")
+        click.echo(f"restore_journal: {record.restore_journal_id}")
+        click.echo(f"workspace_generation: {record.workspace_generation}")
     click.echo(f"state: [{record.review_state}/{record.retention_state}]")
     click.echo(f"inputs: {len(inputs)}")
     click.echo(f"outputs: {len(outputs)}")
@@ -2024,6 +2081,10 @@ def lineage_cmd(version: str, limit: int) -> None:
         )
         if item.workspace_id:
             click.echo(f"    workspace: {item.workspace_id}")
+        if item.restored_from_version_id:
+            click.echo(f"    restored_from: {item.restored_from_version_id}")
+            click.echo(f"    restore_journal: {item.restore_journal_id}")
+            click.echo(f"    workspace_generation: {item.workspace_generation}")
         if item.message:
             click.echo(f"    message: {item.message}")
 
