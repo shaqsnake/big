@@ -463,7 +463,10 @@ big branch acl grant feature/place --group apr_team --write
 - 输出当前用户、uid/gid、当前进程可见 groups、`effective_read` 和 `effective_write`
 - `branch acl grant --read` 将 `group:apr_team` 加入 read groups
 - `branch acl grant --write` 将 `group:apr_team` 加入 write groups，同时 write 隐含 read
-- ACL 变更会写入 audit hash-chain；当前原型只实现 ACL 元数据和展示，暂未对 checkout、commit、reset、restore 做权限拦截。
+- ACL 变更会写入 audit hash-chain；当前原型已经对核心 read/write 命令做基础权限拦截。
+- read 权限覆盖 branch show、branch acl show、branch events、checkout、log、show、lineage、verify 和 diff。
+- write 权限覆盖 commit、reset、restore、promote、lifecycle degrade 和 branch acl grant。
+- 原型测试时可用 `BIG_IDENTITY_USER` 与 `BIG_IDENTITY_GROUPS` 临时模拟不同 Linux group session；生产方案仍应使用当前进程可见的 Linux/NSS groups。
 
 查看命名 branch：
 
@@ -640,6 +643,6 @@ pwd
 
 暂未实现：
 
-- Linux groups 权限 enforcement
+- ACL template、group 存在性强校验和 repo-wide admin policy
 - 3DIC 多 work root checkout/restore 联动
 - recipe_only 的物理 GC、归档搬迁和远端召回

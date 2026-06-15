@@ -112,13 +112,21 @@ def _utc_now() -> str:
 
 
 def _current_identity() -> dict[str, object]:
-    username = getpass.getuser()
+    username = os.environ.get("BIG_IDENTITY_USER") or getpass.getuser()
     uid = os.getuid() if hasattr(os, "getuid") else -1
     gid = os.getgid() if hasattr(os, "getgid") else -1
     group_names: set[str] = {username}
     primary_group = username
 
-    if grp is not None and gid != -1:
+    override_groups = [
+        item.removeprefix("group:").strip()
+        for item in re.split(r"[,;]", os.environ.get("BIG_IDENTITY_GROUPS", ""))
+        if item.strip()
+    ]
+    if override_groups:
+        group_names = set(override_groups)
+        primary_group = override_groups[0]
+    elif grp is not None and gid != -1:
         try:
             primary_group = grp.getgrgid(gid).gr_name
             group_names.add(primary_group)
@@ -194,6 +202,53 @@ def _effective_acl(
     effective_write = bool(matched_write or owner_match)
     effective_read = effective_write or bool(matched_read)
     return effective_read, effective_write, matched_read, matched_write
+
+
+def _branch_acl_unset(record: object) -> bool:
+    return (
+        not record.owner
+        and not record.owner_group
+        and not record.read_groups
+        and not record.write_groups
+    )
+
+
+def _permission_denied(branch_name: str, permission: str) -> click.ClickException:
+    return click.ClickException(
+        f"Permission denied: {permission} access to branch {branch_name}; "
+        "refresh Linux group session or contact IT if group membership changed"
+    )
+
+
+def _require_branch_permission(
+    metadata: SQLiteMetadataRepository,
+    branch_name: str,
+    permission: str,
+) -> object:
+    record = metadata.get_branch(branch_name)
+    if record is None:
+        raise click.ClickException(f"Branch/ref not found: {branch_name}")
+    if _branch_acl_unset(record):
+        return record
+
+    effective_read, effective_write, _, _ = _effective_acl(
+        record,
+        _current_identity(),
+    )
+    if permission == "read" and not effective_read:
+        raise _permission_denied(branch_name, permission)
+    if permission == "write" and not effective_write:
+        raise _permission_denied(branch_name, permission)
+    return record
+
+
+def _require_version_permission(
+    metadata: SQLiteMetadataRepository,
+    version: VersionRecord,
+    permission: str,
+) -> None:
+    if version.branch:
+        _require_branch_permission(metadata, version.branch, permission)
 
 
 def _expand_pattern_args(patterns: tuple[str, ...]) -> list[str]:
@@ -1195,6 +1250,7 @@ def checkout_cmd(
         version = metadata.get_version(target_ref)
         if version is None:
             raise click.ClickException(f"Version not found or ambiguous: {target_ref}")
+        _require_version_permission(metadata, version, "read")
         branch_name = new_branch
         source_ref = version.id
         owner_group, read_groups, write_groups, _ = _branch_acl_for_create(
@@ -1202,13 +1258,14 @@ def checkout_cmd(
             workspace_context.default_branch,
         )
     else:
-        branch_record = metadata.get_branch(target_ref)
-        if branch_record is None:
+        try:
+            branch_record = _require_branch_permission(metadata, target_ref, "read")
+        except click.ClickException:
             if metadata.get_version(target_ref) is not None:
                 raise click.ClickException(
                     "Version checkout requires --new-branch <branch-name>"
                 )
-            raise click.ClickException(f"Branch/ref not found: {target_ref}")
+            raise
         if branch_record.head_version_id is None:
             raise click.ClickException(f"Branch/ref has no head version: {target_ref}")
         version = metadata.get_version(branch_record.head_version_id)
@@ -1615,6 +1672,7 @@ def reset_cmd(version: str, message: str) -> None:
     old_head = metadata.get_branch_head(branch)
     if old_head is None:
         raise click.ClickException(f"Current ref has no head version: {branch}")
+    _require_branch_permission(metadata, branch, "write")
 
     target = metadata.get_version(version)
     if target is None:
@@ -1696,6 +1754,7 @@ def restore_cmd(
     current_head = metadata.get_branch_head(branch)
     if current_head is None:
         raise click.ClickException(f"Current ref has no head version: {branch}")
+    _require_branch_permission(metadata, branch, "write")
 
     current = metadata.get_version(current_head)
     if current is None:
@@ -1964,6 +2023,7 @@ def promote_cmd(version: str, target_state: str, message: str, confirm: str) -> 
     record = metadata.get_version(version)
     if record is None:
         raise click.ClickException(f"Version not found or ambiguous: {version}")
+    _require_version_permission(metadata, record, "write")
 
     target_state = _canonical_review_state(target_state)
     current_rank = REVIEW_STATE_ORDER[record.review_state]
@@ -2036,6 +2096,7 @@ def lifecycle_degrade_cmd(
     record = metadata.get_version(version)
     if record is None:
         raise click.ClickException(f"Version not found or ambiguous: {version}")
+    _require_version_permission(metadata, record, "write")
 
     target_retention = _canonical_retention_state(target_retention)
     if target_retention != "recipe_only":
@@ -2161,6 +2222,13 @@ def branch_create_cmd(branch_name: str, source_ref: str | None) -> None:
 
     source_ref = source_ref or _current_workspace_branch(config)
     resolved_source, source_version_id = _resolve_source_ref(metadata, source_ref)
+    source_branch = metadata.get_branch(resolved_source)
+    if source_branch is not None:
+        _require_branch_permission(metadata, resolved_source, "read")
+    else:
+        source_version = metadata.get_version(resolved_source)
+        if source_version is not None:
+            _require_version_permission(metadata, source_version, "read")
     owner_group, read_groups, write_groups, acl_source = _branch_acl_for_create(
         metadata,
         resolved_source,
@@ -2224,9 +2292,7 @@ def branch_acl() -> None:
 def branch_acl_show_cmd(branch_name: str, effective: bool) -> None:
     """Show branch Linux group ACL metadata."""
     _, metadata = _repo_from_cwd()
-    record = metadata.get_branch(branch_name)
-    if record is None:
-        raise click.ClickException(f"Branch/ref not found: {branch_name}")
+    record = _require_branch_permission(metadata, branch_name, "read")
 
     click.echo(f"branch: {record.name}")
     click.echo(f"owner_group: {record.owner_group or '-'}")
@@ -2270,6 +2336,7 @@ def branch_acl_grant_cmd(
 
     _, metadata = _repo_from_cwd()
     group = _normalize_group_principal(group_name)
+    _require_branch_permission(metadata, branch_name, "write")
     try:
         record = metadata.grant_branch_acl(
             branch=branch_name,
@@ -2299,8 +2366,7 @@ def branch_events_cmd(branch_name: str | None, limit: int) -> None:
     """Show branch audit events."""
     config, metadata = _repo_from_cwd()
     branch_name = branch_name or _current_workspace_branch(config)
-    if metadata.get_branch(branch_name) is None:
-        raise click.ClickException(f"Branch/ref not found: {branch_name}")
+    _require_branch_permission(metadata, branch_name, "read")
 
     events = metadata.list_branch_events(branch_name, limit=limit)
     if not events:
@@ -2321,9 +2387,7 @@ def branch_events_cmd(branch_name: str | None, limit: int) -> None:
 def branch_show_cmd(branch_name: str) -> None:
     """Show branch/ref metadata."""
     _, metadata = _repo_from_cwd()
-    record = metadata.get_branch(branch_name)
-    if record is None:
-        raise click.ClickException(f"Branch/ref not found: {branch_name}")
+    record = _require_branch_permission(metadata, branch_name, "read")
 
     head = record.head_version_id or "-"
     click.echo(f"branch: {record.name}")
@@ -2395,6 +2459,11 @@ def commit_cmd(
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
     branch = branch or workspace_context.default_branch
+    existing_branch = metadata.get_branch(branch)
+    if existing_branch is not None:
+        _require_branch_permission(metadata, branch, "write")
+    elif branch != workspace_context.default_branch or not branch.startswith("workspace/"):
+        raise click.ClickException(f"Branch/ref not found: {branch}")
     restored_from, restore_journal_id, workspace_generation = (
         _read_workspace_restore_provenance(
             workspace_path=workspace_context.workspace_path,
@@ -2498,6 +2567,7 @@ def log_cmd(branch: str | None, limit: int, verbose: bool) -> None:
             ) from exc
         branch = workspace_context.default_branch
 
+    _require_branch_permission(metadata, branch, "read")
     versions = metadata.list_versions(branch, limit=limit)
     if not versions:
         click.echo(f"No versions visible on branch {branch}.")
@@ -2528,6 +2598,7 @@ def show_cmd(version: str, verbose: bool, show_full: bool) -> None:
     record = metadata.get_version(version)
     if record is None:
         raise click.ClickException(f"Version not found or ambiguous: {version}")
+    _require_version_permission(metadata, record, "read")
     refs = metadata.get_file_refs(record.id)
     inputs = [item for item in refs if item.role == "input"]
     outputs = [item for item in refs if item.role == "output"]
@@ -2576,6 +2647,7 @@ def lineage_cmd(version: str, limit: int) -> None:
     record = metadata.get_version(version)
     if record is None:
         raise click.ClickException(f"Version not found or ambiguous: {version}")
+    _require_version_permission(metadata, record, "read")
 
     chain: list[VersionRecord] = []
     current_id: str | None = record.id
@@ -2632,6 +2704,7 @@ def verify_cmd(version: str, show_full: bool) -> None:
     record = metadata.get_version(version)
     if record is None:
         raise click.ClickException(f"Version not found or ambiguous: {version}")
+    _require_version_permission(metadata, record, "read")
 
     refs = metadata.get_file_refs(record.id)
     missing, size_mismatch, hash_mismatch = _verify_file_refs(
@@ -2672,6 +2745,8 @@ def diff_cmd(old_version: str, new_version: str, verbose: bool, show_full: bool)
         raise click.ClickException(f"Version not found or ambiguous: {old_version}")
     if new is None:
         raise click.ClickException(f"Version not found or ambiguous: {new_version}")
+    _require_version_permission(metadata, old, "read")
+    _require_version_permission(metadata, new, "read")
 
     old_refs = {(ref.role, ref.path): ref for ref in metadata.get_file_refs(old.id)}
     new_refs = {(ref.role, ref.path): ref for ref in metadata.get_file_refs(new.id)}

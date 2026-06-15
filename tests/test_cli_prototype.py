@@ -853,6 +853,25 @@ def test_branch_acl_grant_show_and_inherit(tmp_path: Path) -> None:
         assert "effective_read: yes" in show_effective.output
         assert "effective_write: yes" in show_effective.output
 
+        outsider_env = {
+            "BIG_IDENTITY_USER": "mallory",
+            "BIG_IDENTITY_GROUPS": "outsiders",
+        }
+        denied_show = runner.invoke(
+            main, ["branch", "show", "feature/acl"], env=outsider_env
+        )
+        assert denied_show.exit_code != 0
+        assert "Permission denied: read access to branch feature/acl" in denied_show.output
+
+        denied_checkout = runner.invoke(
+            main, ["checkout", "feature/acl", "--plan"], env=outsider_env
+        )
+        assert denied_checkout.exit_code != 0
+        assert (
+            "Permission denied: read access to branch feature/acl"
+            in denied_checkout.output
+        )
+
         missing_permission = runner.invoke(
             main, ["branch", "acl", "grant", "feature/acl", "--group", "apr_team"]
         )
@@ -876,6 +895,58 @@ def test_branch_acl_grant_show_and_inherit(tmp_path: Path) -> None:
         assert "granted_read: yes" in grant_read.output
         assert "granted_write: no" in grant_read.output
         assert "group:apr_team" in grant_read.output
+
+        apr_read_env = {
+            "BIG_IDENTITY_USER": "mallory",
+            "BIG_IDENTITY_GROUPS": "apr_team",
+        }
+        allowed_show = runner.invoke(
+            main, ["branch", "show", "feature/acl"], env=apr_read_env
+        )
+        assert allowed_show.exit_code == 0, allowed_show.output
+        assert "branch: feature/acl" in allowed_show.output
+
+        allowed_checkout_plan = runner.invoke(
+            main, ["checkout", "feature/acl", "--plan"], env=apr_read_env
+        )
+        assert allowed_checkout_plan.exit_code == 0, allowed_checkout_plan.output
+        assert "materialization: plan-only" in allowed_checkout_plan.output
+
+        denied_acl_grant = runner.invoke(
+            main,
+            [
+                "branch",
+                "acl",
+                "grant",
+                "feature/acl",
+                "--group",
+                "pv_team",
+                "--read",
+            ],
+            env=apr_read_env,
+        )
+        assert denied_acl_grant.exit_code != 0
+        assert "Permission denied: write access to branch feature/acl" in denied_acl_grant.output
+
+        denied_commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--branch",
+                "feature/acl",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "unauthorized write",
+            ],
+            env=apr_read_env,
+        )
+        assert denied_commit.exit_code != 0
+        assert "Permission denied: write access to branch feature/acl" in denied_commit.output
 
         grant_write = runner.invoke(
             main,

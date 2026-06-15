@@ -1,5 +1,5 @@
 ---
-title: '原型分支 ACL 元数据'
+title: '原型分支 ACL 元数据与基础拦截'
 type: 'feature'
 created: '2026-06-15'
 status: 'in-progress'
@@ -8,20 +8,21 @@ context:
   - '{project-root}/_bmad-output/implementation-artifacts/spec-prototype-branch-metadata.md'
 ---
 
-# 原型分支 ACL 元数据
+# 原型分支 ACL 元数据与基础拦截
 
 ## Intent
 
-**问题：** Story 2.1 要求分支访问权限绑定到公司现有 Linux groups，而不是维护大量用户名单。原型此前只有 branch owner 字段，没有 group ACL、继承、展示或 ACL 变更审计。
+**问题：** Story 2.1 要求分支访问权限绑定到公司现有 Linux groups，而不是维护大量用户名单。原型此前只有 branch owner 字段，没有 group ACL、继承、展示或 ACL 变更审计；即使有 ACL 元数据，也还不能阻止无权限用户读取 branch manifest 或写入 branch。
 
-**方案：** 在 branch metadata 中增加 `owner_group`、`read_groups` 和 `write_groups`。`big branch create` 默认继承 source branch ACL；若 source branch 没有 ACL，则使用当前进程可见的 primary group 创建默认 owner/read/write group。新增 `big branch acl show <branch> [--effective]` 和 `big branch acl grant <branch> --group <linux-group> --read|--write`。`write` 隐含 `read`，ACL 变更写入 audit hash-chain。
+**方案：** 在 branch metadata 中增加 `owner_group`、`read_groups` 和 `write_groups`。`big branch create` 默认继承 source branch ACL；若 source branch 没有 ACL，则使用当前进程可见的 primary group 创建默认 owner/read/write group。新增 `big branch acl show <branch> [--effective]` 和 `big branch acl grant <branch> --group <linux-group> --read|--write`。`write` 隐含 `read`，ACL 变更写入 audit hash-chain。基础 enforcement 覆盖 `branch show`、`branch acl show`、`branch events`、`checkout`、`log`、`show`、`lineage`、`verify`、`diff` 的 read 权限，以及 `commit`、`reset`、`restore`、`promote`、`lifecycle degrade`、`branch acl grant` 的 write 权限。
 
 ## Boundaries
 
-- 本切片只实现 ACL 元数据、继承、展示和 grant 审计；暂不对 checkout、commit、reset、restore、promote 等命令做权限拦截。
+- 本切片实现 ACL 元数据、继承、展示、grant 审计和核心 CLI read/write 权限拦截。
 - MVP 的 IdentityResolver 使用当前进程可见的 Linux/NSS groups；在非 Linux 测试环境中降级为当前用户名同名 group。
+- 原型测试可通过 `BIG_IDENTITY_USER` 和 `BIG_IDENTITY_GROUPS` 覆盖当前身份，用于模拟不同 Linux group session。
 - 本切片不展开或缓存 group 成员名单。
-- 本切片不实现 ACL template、不实现 group 存在性强校验、不支持逐用户大规模授权。
+- 本切片不实现 ACL template、不实现 group 存在性强校验、不支持逐用户大规模授权，也不覆盖 repo-wide admin policy。
 - `branch acl grant --write` 会同时授予 read。
 
 ## Acceptance
@@ -45,6 +46,18 @@ context:
 - Given grant 命令没有指定 `--read` 或 `--write`
 - When 用户执行命令
 - Then 系统拒绝操作，不写入 ACL。
+
+- Given 当前用户不在 branch owner/read/write groups 中，且不是 branch owner
+- When 用户执行 `big branch show <branch>`、`big checkout <branch> --plan` 或 `big show <version>`
+- Then 系统拒绝操作，并在输出 manifest、FileRef 或 checkout target path 前返回权限不足错误。
+
+- Given 当前用户只有 read group
+- When 用户执行 `big commit --branch <branch>` 或 `big branch acl grant <branch> --group pv_team --read`
+- Then 系统拒绝操作，并返回 write 权限不足错误。
+
+- Given 当前用户被授予 write group
+- When 用户执行需要 write 权限的命令
+- Then `write` 隐含 `read`，权限判断通过。
 
 ## Verification
 
