@@ -56,6 +56,7 @@ BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
 REVIEW_STATES = ("Exploring", "Candidate", "Pinned", "Golden")
 REVIEW_STATE_ORDER = {state: index for index, state in enumerate(REVIEW_STATES)}
 RETENTION_STATES = ("resident", "recipe_only", "archived", "missing")
+HIGH_IMPACT_INPUT_FORMATS = {"tcl", "sdc", "yaml", "yml", "json", "runset"}
 
 
 def _repo_from_cwd() -> tuple[object, SQLiteMetadataRepository]:
@@ -397,6 +398,123 @@ def _edge_evidence(edge: ProvenanceEdge) -> dict[str, object]:
     except json.JSONDecodeError:
         return {}
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _input_refs_by_path(
+    metadata: SQLiteMetadataRepository,
+    version_id: str,
+) -> dict[str, FileRef]:
+    return {
+        ref.path: ref
+        for ref in metadata.get_file_refs(version_id)
+        if ref.role == "input"
+    }
+
+
+def _is_high_impact_input(ref: FileRef) -> bool:
+    return (
+        ref.semantic_role == "script_or_config"
+        or ref.format_hint in HIGH_IMPACT_INPUT_FORMATS
+    )
+
+
+def _lineage_change_entries(
+    current_inputs: dict[str, FileRef],
+    parent_inputs: dict[str, FileRef],
+) -> tuple[list[tuple[str, str, FileRef | None, FileRef | None]], int]:
+    entries: list[tuple[str, str, FileRef | None, FileRef | None]] = []
+    for path in sorted(set(current_inputs) - set(parent_inputs)):
+        entries.append(("+", path, None, current_inputs[path]))
+    for path in sorted(set(parent_inputs) - set(current_inputs)):
+        entries.append(("-", path, parent_inputs[path], None))
+    for path in sorted(set(current_inputs) & set(parent_inputs)):
+        old = parent_inputs[path]
+        new = current_inputs[path]
+        if old.cas_hash != new.cas_hash:
+            entries.append(("~", path, old, new))
+
+    def sort_key(item: tuple[str, str, FileRef | None, FileRef | None]) -> tuple[int, str, str]:
+        _, path, old_ref, new_ref = item
+        ref = new_ref or old_ref
+        high_impact = ref is not None and _is_high_impact_input(ref)
+        return (0 if high_impact else 1, path, item[0])
+
+    entries.sort(key=sort_key)
+    high_impact_count = sum(
+        1
+        for _, _, old_ref, new_ref in entries
+        if _is_high_impact_input(new_ref or old_ref)
+    )
+    return entries, high_impact_count
+
+
+def _print_lineage_changes(
+    metadata: SQLiteMetadataRepository,
+    item: VersionRecord,
+    *,
+    verbose: bool,
+    show_full: bool,
+) -> None:
+    parent = metadata.get_version(item.parent_id) if item.parent_id else None
+    try:
+        current_inputs = _input_refs_by_path(metadata, item.id)
+    except click.ClickException:
+        click.echo("    recipe_change: restricted")
+        click.echo("    input_changes: unavailable")
+        return
+
+    if parent is None:
+        recipe_status = "root"
+        parent_inputs: dict[str, FileRef] = {}
+    else:
+        try:
+            _require_version_permission(metadata, parent, "read")
+        except click.ClickException:
+            click.echo("    recipe_change: restricted")
+            click.echo("    input_changes: unavailable")
+            return
+        recipe_status = "unchanged" if item.recipe_hash == parent.recipe_hash else "changed"
+        parent_inputs = _input_refs_by_path(metadata, parent.id)
+
+    entries, high_impact_count = _lineage_change_entries(current_inputs, parent_inputs)
+    added = sum(1 for op, _, _, _ in entries if op == "+")
+    removed = sum(1 for op, _, _, _ in entries if op == "-")
+    modified = sum(1 for op, _, _, _ in entries if op == "~")
+    click.echo(f"    recipe_change: {recipe_status}")
+    click.echo(
+        "    input_changes: "
+        f"added={added} removed={removed} modified={modified}"
+    )
+    click.echo(f"    high_impact_inputs: {high_impact_count}")
+
+    if not entries:
+        return
+
+    visible_count = len(entries) if show_full else (10 if verbose else 3)
+    visible_entries = entries[:visible_count]
+    click.echo("    changed_inputs:")
+    for op, path, old_ref, new_ref in visible_entries:
+        ref = new_ref or old_ref
+        if ref is None:
+            continue
+        if op == "+":
+            click.echo(
+                f"      + {path} -->{_short_hash(ref.cas_hash)} "
+                f"0->{ref.size} {ref.semantic_role}/{ref.format_hint}"
+            )
+        elif op == "-":
+            click.echo(
+                f"      - {path} {_short_hash(ref.cas_hash)}->- "
+                f"{ref.size}->0 {ref.semantic_role}/{ref.format_hint}"
+            )
+        else:
+            click.echo(
+                f"      ~ {path} {_short_hash(old_ref.cas_hash)}->"
+                f"{_short_hash(new_ref.cas_hash)} {old_ref.size}->{new_ref.size} "
+                f"{new_ref.semantic_role}/{new_ref.format_hint}"
+            )
+    if len(entries) > len(visible_entries):
+        click.echo(f"      ... {len(entries) - len(visible_entries)} more; use --full")
 
 
 def _resolve_patterns(patterns: tuple[str, ...], workspace: Path, label: str) -> list[Path]:
@@ -2813,7 +2931,16 @@ def show_cmd(version: str, verbose: bool, show_full: bool) -> None:
 @main.command("lineage")
 @click.argument("version")
 @click.option("--limit", default=20, show_default=True, type=click.IntRange(min=1))
-def lineage_cmd(version: str, limit: int) -> None:
+@click.option("--changes", is_flag=True, help="Show recipe/input changes per node.")
+@click.option("--verbose", is_flag=True, help="Show more change details.")
+@click.option("--full", "show_full", is_flag=True, help="Show all changed inputs.")
+def lineage_cmd(
+    version: str,
+    limit: int,
+    changes: bool,
+    verbose: bool,
+    show_full: bool,
+) -> None:
     """Show a version's parent chain."""
     _, metadata = _repo_from_cwd()
     record = metadata.get_version(version)
@@ -2863,6 +2990,13 @@ def lineage_cmd(version: str, limit: int) -> None:
             click.echo(f"    restored_from: {item.restored_from_version_id}")
             click.echo(f"    restore_journal: {item.restore_journal_id}")
             click.echo(f"    workspace_generation: {item.workspace_generation}")
+        if changes:
+            _print_lineage_changes(
+                metadata,
+                item,
+                verbose=verbose,
+                show_full=show_full,
+            )
         upstream_edges = metadata.list_upstream_edges(item.id)
         if upstream_edges:
             click.echo("    consumes:")

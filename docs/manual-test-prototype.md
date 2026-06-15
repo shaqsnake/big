@@ -154,6 +154,7 @@ big repo stats
 big status
 big log
 big lineage <version>
+big lineage <version> --changes
 big show <version> --full
 big verify <version>
 big repo verify
@@ -164,6 +165,8 @@ big repo verify
 - `big status` 显示当前 workspace 的 `head` 等于刚才提交的 version ID
 - `big log` 显示刚才的 version ID
 - `big lineage <version>` 显示从目标 version 向前追溯的 parent chain；如果 commit 时声明了 `--cross-branch-input`，也会在对应节点下显示直接 `consumes` 上游边。
+- `big lineage <version> --changes` 为每个 parent-chain 节点显示 `recipe_change`、inputs added/removed/modified 数量和少量 changed input 摘要；`--verbose` 展示更多路径，`--full` 展开全部 changed inputs。
+- `lineage --changes` 只比较 inputs，不把 outputs 或 lifecycle/retention 状态变化误报为 recipe 变化；`consumes` 边作为数据依赖展示，不会被当作同一 branch 的 parent 修改。
 - `big show --full` 展示 inputs、outputs、SHA-256 摘要和状态 `[Exploring/resident]`
 - `big verify <version>` 输出 `integrity: ok`，表示该 version manifest 引用的 CAS 对象存在、大小一致且 SHA-256 校验通过。
 - `big repo verify` 输出 `integrity: ok`，表示仓库内所有 manifest 引用的 CAS 对象都通过完整性检查；如果失败，可加 `--full` 查看具体 version 和 FileRef。
@@ -670,6 +673,7 @@ pwd
 - `big commit --cross-branch-input <version>[:path]`
 - `big log`
 - `big lineage`
+- `big lineage --changes`
 - `big show`
 - `big verify`
 - `big diff`

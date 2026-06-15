@@ -332,6 +332,7 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "resident: versions=1" in stats.output
 
         _write(workspace / "inputs" / "top.v", "module top; wire a; endmodule\n")
+        _write(workspace / "scripts" / "place.tcl", "set effort high\nplace_design\n")
         _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\nCOMPONENTS 1 ;\n")
         second = runner.invoke(
             main,
@@ -375,6 +376,18 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         )
         assert f"1 {first_version.group(1)} parent=-" in lineage.output
         assert "message: modified place snapshot" in lineage.output
+
+        lineage_changes = runner.invoke(
+            main,
+            ["lineage", second_version.group(1), "--changes", "--verbose"],
+        )
+        assert lineage_changes.exit_code == 0, lineage_changes.output
+        assert "recipe_change: changed" in lineage_changes.output
+        assert "input_changes: added=0 removed=0 modified=2" in lineage_changes.output
+        assert "high_impact_inputs: 1" in lineage_changes.output
+        assert "~ scripts/place.tcl" in lineage_changes.output
+        assert "~ inputs/top.v" in lineage_changes.output
+        assert "outputs/top.def" not in lineage_changes.output
 
         limited_lineage = runner.invoke(
             main,
@@ -557,6 +570,66 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert f"promote version {second_version.group(1)}" in final_audit_log.output
         assert "reset branch workspace/default/alice/APR" in final_audit_log.output
         assert "create_branch branch feature/place" in final_audit_log.output
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_lineage_changes_ignore_output_only_commits(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        first = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "base",
+            ],
+        )
+        assert first.exit_code == 0, first.output
+
+        _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\nCOMPONENTS 1 ;\n")
+        second = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "output only",
+            ],
+        )
+        assert second.exit_code == 0, second.output
+        second_version = re.search(r"version: (v[0-9a-f]+)", second.output)
+        assert second_version
+
+        lineage_changes = runner.invoke(
+            main,
+            ["lineage", second_version.group(1), "--changes", "--verbose"],
+        )
+        assert lineage_changes.exit_code == 0, lineage_changes.output
+        assert "recipe_change: unchanged" in lineage_changes.output
+        assert "input_changes: added=0 removed=0 modified=0" in lineage_changes.output
+        assert "outputs/top.def" not in lineage_changes.output
     finally:
         os.chdir(old_cwd)
 
