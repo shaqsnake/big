@@ -30,6 +30,7 @@ class RepoConfig:
     home: Path
     work_roots: tuple[WorkRoot, ...]
     acl_templates: tuple[AclTemplate, ...] = ()
+    acl_validate_groups: bool = False
 
     @property
     def big_dir(self) -> Path:
@@ -150,6 +151,18 @@ def _load_acl_templates(data: dict[str, object]) -> tuple[AclTemplate, ...]:
     return tuple(templates)
 
 
+def _load_acl_validate_groups(data: dict[str, object]) -> bool:
+    raw_acl = data.get("acl", {})
+    if raw_acl is None:
+        return False
+    if not isinstance(raw_acl, dict):
+        raise ValueError("acl must be declared with [acl]")
+    value = raw_acl.get("validate_groups", False)
+    if not isinstance(value, bool):
+        raise ValueError("acl.validate_groups must be true or false")
+    return value
+
+
 def load_config(config_path: Path) -> RepoConfig:
     data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     repo = data["repo"]
@@ -184,6 +197,7 @@ def load_config(config_path: Path) -> RepoConfig:
         home=home,
         work_roots=work_roots,
         acl_templates=_load_acl_templates(data),
+        acl_validate_groups=_load_acl_validate_groups(data),
     )
 
 

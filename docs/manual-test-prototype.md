@@ -452,6 +452,11 @@ big branch create feature/place
 也可以让管理员先在中心 `big.toml` 里预置 ACL 模板，PD Lead 创建分支时只引用模板名：
 
 ```toml
+# 如果当前环境能通过 Linux/NSS 解析这些 group，可以开启强校验。
+# 手工实验时请把 apr_leads/apr_team/apr_writers 换成真实存在的 Linux group。
+[acl]
+validate_groups = true
+
 [[acl_templates]]
 name = "apr"
 owner_group = "group:apr_leads"
@@ -469,6 +474,7 @@ big branch create feature/apr --from feature/place --acl-template apr
 - 输出模板中的 `owner_group`、`read_groups` 和 `write_groups`
 - `write_groups` 会被视为同时具有 read 权限；原型会把模板中的 write groups 显式并入 read groups。
 - 模板里的 group principal 需要写成 `group:<linux-group>` 形式，避免把普通字符串误认为用户或本地别名。
+- 当 `[acl] validate_groups = true` 时，`branch create --acl-template` 和 `branch acl grant` 会通过当前进程可用的 Linux/NSS group resolver 校验 group 是否存在；不存在或当前平台无法解析时会拒绝写入。
 
 查看和调整 branch ACL：
 
@@ -664,6 +670,6 @@ pwd
 
 暂未实现：
 
-- group 存在性强校验和 repo-wide admin policy
+- repo-wide admin policy
 - 3DIC 多 work root checkout/restore 联动
 - recipe_only 的物理 GC、归档搬迁和远端召回

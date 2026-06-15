@@ -14,7 +14,7 @@ context:
 
 **问题：** Story 2.1 要求分支访问权限绑定到公司现有 Linux groups，而不是维护大量用户名单。原型此前只有 branch owner 字段，没有 group ACL、继承、展示或 ACL 变更审计；即使有 ACL 元数据，也还不能阻止无权限用户读取 branch manifest 或写入 branch。
 
-**方案：** 在 branch metadata 中增加 `owner_group`、`read_groups` 和 `write_groups`。`big branch create` 默认继承 source branch ACL；若 source branch 没有 ACL，则使用当前进程可见的 primary group 创建默认 owner/read/write group；也可以通过 `--acl-template <name>` 套用中心 `big.toml` 中的 `[[acl_templates]]`。新增 `big branch acl show <branch> [--effective]` 和 `big branch acl grant <branch> --group <linux-group> --read|--write`。`write` 隐含 `read`，ACL 变更写入 audit hash-chain。基础 enforcement 覆盖 `branch show`、`branch acl show`、`branch events`、`checkout`、`log`、`show`、`lineage`、`verify`、`diff` 的 read 权限，以及 `commit`、`reset`、`restore`、`promote`、`lifecycle degrade`、`branch acl grant` 的 write 权限。
+**方案：** 在 branch metadata 中增加 `owner_group`、`read_groups` 和 `write_groups`。`big branch create` 默认继承 source branch ACL；若 source branch 没有 ACL，则使用当前进程可见的 primary group 创建默认 owner/read/write group；也可以通过 `--acl-template <name>` 套用中心 `big.toml` 中的 `[[acl_templates]]`。当项目配置 `[acl] validate_groups = true` 时，模板应用和 `branch acl grant` 会通过当前进程可用的 Linux/NSS group resolver 校验 group 是否存在。新增 `big branch acl show <branch> [--effective]` 和 `big branch acl grant <branch> --group <linux-group> --read|--write`。`write` 隐含 `read`，ACL 变更写入 audit hash-chain。基础 enforcement 覆盖 `branch show`、`branch acl show`、`branch events`、`checkout`、`log`、`show`、`lineage`、`verify`、`diff` 的 read 权限，以及 `commit`、`reset`、`restore`、`promote`、`lifecycle degrade`、`branch acl grant` 的 write 权限。
 
 ## Boundaries
 
@@ -22,7 +22,8 @@ context:
 - MVP 的 IdentityResolver 使用当前进程可见的 Linux/NSS groups；在非 Linux 测试环境中降级为当前用户名同名 group。
 - 原型测试可通过 `BIG_IDENTITY_USER` 和 `BIG_IDENTITY_GROUPS` 覆盖当前身份，用于模拟不同 Linux group session。
 - 本切片不展开或缓存 group 成员名单。
-- 本切片不实现 group 存在性强校验、不支持逐用户大规模授权，也不覆盖 repo-wide admin policy。
+- 本切片支持 `[acl] validate_groups = true` 下的 Linux/NSS group 存在性强校验；默认关闭以便本地实验和无真实企业 group 的手测环境继续运行。
+- 本切片不支持逐用户大规模授权，也不覆盖 repo-wide admin policy。
 - `[[acl_templates]]` 里的 group principal 必须显式使用 `group:<linux-group>`；CLI 的 `branch acl grant --group` 仍允许输入裸 group 名并归一化为 `group:<linux-group>`。
 - `branch acl grant --write` 会同时授予 read。
 
@@ -43,6 +44,10 @@ context:
 - Given ACL template 中的 group 没有使用 `group:<linux-group>` 形式
 - When 执行引用该模板的 `big branch create`
 - Then 系统拒绝创建 branch，并提示模板 group principal 格式错误。
+
+- Given 中心 `big.toml` 设置 `[acl] validate_groups = true`
+- When ACL template 或 `branch acl grant` 引用了当前 Linux/NSS 无法解析的 group
+- Then 系统拒绝写入，并输出无法解析的 `group:<linux-group>`；模板路径还会输出所属 template 名称。
 
 - Given PD Lead 需要查看 ACL
 - When 执行 `big branch acl show feature/place --effective`

@@ -9,6 +9,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+import big.cli as cli_module
 from big.cas import object_path
 from big.cli import main
 from big.config import find_config
@@ -1089,6 +1090,118 @@ owner_group = "apr_leads"
         )
         assert bad.exit_code != 0
         assert "ACL template bad group must use group:<name>: apr_leads" in bad.output
+
+        audit_verify = runner.invoke(main, ["audit", "verify"])
+        assert audit_verify.exit_code == 0, audit_verify.output
+        assert "events: 2" in audit_verify.output
+        assert "integrity: ok" in audit_verify.output
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_acl_group_validation_uses_linux_group_resolver(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeGroup:
+        def __init__(self, name: str) -> None:
+            self.gr_name = name
+
+    class FakeGrp:
+        def __init__(self, known_groups: set[str]) -> None:
+            self.known_groups = known_groups
+
+        def getgrnam(self, name: str) -> FakeGroup:
+            if name not in self.known_groups:
+                raise KeyError(name)
+            return FakeGroup(name)
+
+        def getgrgid(self, gid: int) -> FakeGroup:
+            return FakeGroup("apr_write")
+
+    monkeypatch.setattr(
+        cli_module,
+        "grp",
+        FakeGrp({"apr_leads", "apr_read", "apr_write"}),
+    )
+
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+    config_path = repo_root / "big.toml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + """
+
+[acl]
+validate_groups = true
+
+[[acl_templates]]
+name = "apr"
+owner_group = "group:apr_leads"
+read_groups = ["group:apr_read"]
+write_groups = ["group:apr_write"]
+
+[[acl_templates]]
+name = "missing"
+owner_group = "group:no_such_group"
+""",
+        encoding="utf-8",
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "acl validation base",
+            ],
+        )
+        assert commit.exit_code == 0, commit.output
+
+        create = runner.invoke(
+            main, ["branch", "create", "feature/apr", "--acl-template", "apr"]
+        )
+        assert create.exit_code == 0, create.output
+        assert "acl_source: template:apr" in create.output
+
+        missing_template = runner.invoke(
+            main, ["branch", "create", "feature/missing", "--acl-template", "missing"]
+        )
+        assert missing_template.exit_code != 0
+        assert (
+            "ACL template missing references unresolved Linux group: "
+            "group:no_such_group"
+        ) in missing_template.output
+
+        missing_grant = runner.invoke(
+            main,
+            [
+                "branch",
+                "acl",
+                "grant",
+                "feature/apr",
+                "--group",
+                "no_such_group",
+                "--read",
+            ],
+        )
+        assert missing_grant.exit_code != 0
+        assert "Unresolved Linux group: group:no_such_group" in missing_grant.output
 
         audit_verify = runner.invoke(main, ["audit", "verify"])
         assert audit_verify.exit_code == 0, audit_verify.output

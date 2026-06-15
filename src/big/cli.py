@@ -178,6 +178,36 @@ def _normalize_template_group_principal(template: AclTemplate, value: str) -> st
     return _normalize_group_principal(value)
 
 
+def _require_resolvable_linux_group(
+    config: RepoConfig,
+    principal: str,
+    *,
+    template_name: str = "",
+) -> None:
+    if not config.acl_validate_groups:
+        return
+    group_name = principal.removeprefix("group:")
+    if grp is None:
+        if template_name:
+            raise click.ClickException(
+                f"ACL template {template_name} cannot resolve Linux group "
+                f"because NSS group resolver is unavailable: {principal}"
+            )
+        raise click.ClickException(
+            "Cannot resolve Linux group because NSS group resolver is unavailable: "
+            f"{principal}"
+        )
+    try:
+        grp.getgrnam(group_name)
+    except KeyError as exc:
+        if template_name:
+            raise click.ClickException(
+                f"ACL template {template_name} references unresolved Linux group: "
+                f"{principal}"
+            ) from exc
+        raise click.ClickException(f"Unresolved Linux group: {principal}") from exc
+
+
 def _branch_acl_from_template(
     config: RepoConfig,
     template_name: str,
@@ -200,6 +230,12 @@ def _branch_acl_from_template(
     )
     read_groups = _unique_groups((*read_groups, *write_groups))
     write_groups = _unique_groups(write_groups)
+    for group in _unique_groups((owner_group, *read_groups, *write_groups)):
+        _require_resolvable_linux_group(
+            config,
+            group,
+            template_name=template.name,
+        )
     return owner_group, read_groups, write_groups, f"template:{template.name}"
 
 
@@ -2393,9 +2429,10 @@ def branch_acl_grant_cmd(
     if not grant_read and not grant_write:
         raise click.ClickException("ACL grant requires --read or --write")
 
-    _, metadata = _repo_from_cwd()
+    config, metadata = _repo_from_cwd()
     group = _normalize_group_principal(group_name)
     _require_branch_permission(metadata, branch_name, "write")
+    _require_resolvable_linux_group(config, group)
     try:
         record = metadata.grant_branch_acl(
             branch=branch_name,
