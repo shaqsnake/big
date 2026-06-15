@@ -31,6 +31,7 @@ from .cas import (
     UnstableFileError,
 )
 from .config import (
+    AclTemplate,
     CONFIG_NAME,
     ensure_repo_dirs,
     find_config,
@@ -157,6 +158,49 @@ def _normalize_group_principal(value: str) -> str:
     if not group or any(item.isspace() for item in group):
         raise click.ClickException(f"Invalid Linux group principal: {value}")
     return f"group:{group}"
+
+
+def _unique_groups(groups: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for group in groups:
+        if group not in seen:
+            result.append(group)
+            seen.add(group)
+    return tuple(result)
+
+
+def _normalize_template_group_principal(template: AclTemplate, value: str) -> str:
+    if not value.strip().startswith("group:"):
+        raise click.ClickException(
+            f"ACL template {template.name} group must use group:<name>: {value}"
+        )
+    return _normalize_group_principal(value)
+
+
+def _branch_acl_from_template(
+    config: RepoConfig,
+    template_name: str,
+) -> tuple[str, tuple[str, ...], tuple[str, ...], str]:
+    template = next(
+        (item for item in config.acl_templates if item.name == template_name),
+        None,
+    )
+    if template is None:
+        raise click.ClickException(f"ACL template not found: {template_name}")
+
+    owner_group = _normalize_template_group_principal(template, template.owner_group)
+    read_groups = tuple(
+        _normalize_template_group_principal(template, item)
+        for item in template.read_groups
+    )
+    write_groups = tuple(
+        _normalize_template_group_principal(template, item)
+        for item in template.write_groups
+    )
+    read_groups = _unique_groups((*read_groups, *write_groups))
+    write_groups = _unique_groups(write_groups)
+    return owner_group, read_groups, write_groups, f"template:{template.name}"
 
 
 def _default_branch_acl() -> tuple[str, tuple[str, ...], tuple[str, ...]]:
@@ -2213,7 +2257,16 @@ def audit_verify_cmd(show_full: bool) -> None:
     default=None,
     help="Source branch/ref or version. Defaults to current workspace ref.",
 )
-def branch_create_cmd(branch_name: str, source_ref: str | None) -> None:
+@click.option(
+    "--acl-template",
+    default=None,
+    help="Apply a named ACL template from big.toml.",
+)
+def branch_create_cmd(
+    branch_name: str,
+    source_ref: str | None,
+    acl_template: str | None,
+) -> None:
     """Create a named branch from a source ref."""
     _validate_branch_name(branch_name)
     config, metadata = _repo_from_cwd()
@@ -2229,10 +2282,16 @@ def branch_create_cmd(branch_name: str, source_ref: str | None) -> None:
         source_version = metadata.get_version(resolved_source)
         if source_version is not None:
             _require_version_permission(metadata, source_version, "read")
-    owner_group, read_groups, write_groups, acl_source = _branch_acl_for_create(
-        metadata,
-        resolved_source,
-    )
+    if acl_template:
+        owner_group, read_groups, write_groups, acl_source = _branch_acl_from_template(
+            config,
+            acl_template,
+        )
+    else:
+        owner_group, read_groups, write_groups, acl_source = _branch_acl_for_create(
+            metadata,
+            resolved_source,
+        )
     created_at = _utc_now()
     try:
         metadata.create_branch(

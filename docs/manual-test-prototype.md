@@ -449,6 +449,27 @@ big branch create feature/place
 - 输出的 `head` 等于 alice 当前 workspace ref 的 head version
 - 输出 `owner_group`、`read_groups` 和 `write_groups`；如果 source branch 没有 ACL，则使用当前进程可见的 primary group 作为默认 group。
 
+也可以让管理员先在中心 `big.toml` 里预置 ACL 模板，PD Lead 创建分支时只引用模板名：
+
+```toml
+[[acl_templates]]
+name = "apr"
+owner_group = "group:apr_leads"
+read_groups = ["group:apr_team"]
+write_groups = ["group:apr_writers"]
+```
+
+```bash
+big branch create feature/apr --from feature/place --acl-template apr
+```
+
+期望：
+
+- 输出 `acl_source: template:apr`
+- 输出模板中的 `owner_group`、`read_groups` 和 `write_groups`
+- `write_groups` 会被视为同时具有 read 权限；原型会把模板中的 write groups 显式并入 read groups。
+- 模板里的 group principal 需要写成 `group:<linux-group>` 形式，避免把普通字符串误认为用户或本地别名。
+
 查看和调整 branch ACL：
 
 ```bash
@@ -643,6 +664,6 @@ pwd
 
 暂未实现：
 
-- ACL template、group 存在性强校验和 repo-wide admin policy
+- group 存在性强校验和 repo-wide admin policy
 - 3DIC 多 work root checkout/restore 联动
 - recipe_only 的物理 GC、归档搬迁和远端召回

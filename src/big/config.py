@@ -16,11 +16,20 @@ class WorkRoot:
 
 
 @dataclass(frozen=True)
+class AclTemplate:
+    name: str
+    owner_group: str
+    read_groups: tuple[str, ...] = ()
+    write_groups: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class RepoConfig:
     repo_id: str
     integration: str
     home: Path
     work_roots: tuple[WorkRoot, ...]
+    acl_templates: tuple[AclTemplate, ...] = ()
 
     @property
     def big_dir(self) -> Path:
@@ -98,6 +107,49 @@ def write_pointer_config(
     return config_path
 
 
+def _string_tuple(values: object, field_name: str) -> tuple[str, ...]:
+    if values is None:
+        return ()
+    if not isinstance(values, list):
+        raise ValueError(f"ACL template {field_name} must be a list")
+    return tuple(str(item).strip() for item in values if str(item).strip())
+
+
+def _load_acl_templates(data: dict[str, object]) -> tuple[AclTemplate, ...]:
+    raw_templates = data.get("acl_templates", [])
+    if raw_templates is None:
+        return ()
+    if not isinstance(raw_templates, list):
+        raise ValueError("acl_templates must be declared with [[acl_templates]]")
+
+    templates: list[AclTemplate] = []
+    seen: set[str] = set()
+    for raw in raw_templates:
+        if not isinstance(raw, dict):
+            raise ValueError("ACL template entry must be a table")
+        name = str(raw.get("name", "")).strip()
+        if not name or any(item.isspace() for item in name):
+            raise ValueError("ACL template name must be non-empty without spaces")
+        if name in seen:
+            raise ValueError(f"Duplicate ACL template: {name}")
+        owner_group = str(raw.get("owner_group", "")).strip()
+        if not owner_group:
+            raise ValueError(f"ACL template {name} requires owner_group")
+        templates.append(
+            AclTemplate(
+                name=name,
+                owner_group=owner_group,
+                read_groups=_string_tuple(raw.get("read_groups", []), "read_groups"),
+                write_groups=_string_tuple(
+                    raw.get("write_groups", []),
+                    "write_groups",
+                ),
+            )
+        )
+        seen.add(name)
+    return tuple(templates)
+
+
 def load_config(config_path: Path) -> RepoConfig:
     data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     repo = data["repo"]
@@ -131,6 +183,7 @@ def load_config(config_path: Path) -> RepoConfig:
         integration=str(repo.get("integration", "2d")),
         home=home,
         work_roots=work_roots,
+        acl_templates=_load_acl_templates(data),
     )
 
 

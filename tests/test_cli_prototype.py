@@ -994,6 +994,110 @@ def test_branch_acl_grant_show_and_inherit(tmp_path: Path) -> None:
         os.chdir(old_cwd)
 
 
+def test_branch_create_can_apply_acl_template_from_config(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+    config_path = repo_root / "big.toml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + """
+
+[[acl_templates]]
+name = "apr"
+owner_group = "group:apr_leads"
+read_groups = ["group:apr_read"]
+write_groups = ["group:apr_write"]
+
+[[acl_templates]]
+name = "bad"
+owner_group = "apr_leads"
+""",
+        encoding="utf-8",
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "acl template base",
+            ],
+        )
+        assert commit.exit_code == 0, commit.output
+
+        create = runner.invoke(
+            main, ["branch", "create", "feature/apr", "--acl-template", "apr"]
+        )
+        assert create.exit_code == 0, create.output
+        assert "acl_source: template:apr" in create.output
+        assert "owner_group: group:apr_leads" in create.output
+        assert "read_groups: group:apr_read,group:apr_write" in create.output
+        assert "write_groups: group:apr_write" in create.output
+
+        apr_read_env = {
+            "BIG_IDENTITY_USER": "mallory",
+            "BIG_IDENTITY_GROUPS": "apr_read",
+        }
+        allowed_show = runner.invoke(
+            main, ["branch", "show", "feature/apr"], env=apr_read_env
+        )
+        assert allowed_show.exit_code == 0, allowed_show.output
+
+        denied_commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--branch",
+                "feature/apr",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "read group cannot write",
+            ],
+            env=apr_read_env,
+        )
+        assert denied_commit.exit_code != 0
+        assert "Permission denied: write access to branch feature/apr" in denied_commit.output
+
+        missing = runner.invoke(
+            main, ["branch", "create", "feature/missing", "--acl-template", "missing"]
+        )
+        assert missing.exit_code != 0
+        assert "ACL template not found: missing" in missing.output
+
+        bad = runner.invoke(
+            main, ["branch", "create", "feature/bad", "--acl-template", "bad"]
+        )
+        assert bad.exit_code != 0
+        assert "ACL template bad group must use group:<name>: apr_leads" in bad.output
+
+        audit_verify = runner.invoke(main, ["audit", "verify"])
+        assert audit_verify.exit_code == 0, audit_verify.output
+        assert "events: 2" in audit_verify.output
+        assert "integrity: ok" in audit_verify.output
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_restore_in_place_rewrites_clean_workspace_with_journal(
     tmp_path: Path,
 ) -> None:
