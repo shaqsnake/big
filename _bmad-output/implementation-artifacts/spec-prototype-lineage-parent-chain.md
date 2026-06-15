@@ -19,8 +19,8 @@ context:
 ## Boundaries
 
 - 该命令只读 metadata，不写 CAS、不移动 branch head、不创建 branch event。
-- 当前原型只展示 commit parent chain，不实现完整 provenance graph。
-- 不引入 `derived_from`、`consumes`、EDA step 输入输出依赖边或跨 work root lineage；这些属于后续 Growth/Architecture 设计。
+- 本 spec 只定义 commit parent chain 的基础输出；直接 `consumes` 上游边由 `spec-prototype-cross-branch-consumes.md` 覆盖。
+- 不引入自动 `derived_from` 推断、EDA step 输入输出依赖解析、下游影响分析或跨 work root 联动 lineage；这些属于后续 Growth/Architecture 设计。
 - version 解析复用现有 `MetadataRepository.get_version` 合约：支持完整 ID 或唯一前缀；未找到或前缀歧义时失败。
 
 ## Acceptance

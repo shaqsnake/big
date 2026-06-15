@@ -42,6 +42,24 @@ class FileRef:
 
 
 @dataclass(frozen=True)
+class ProvenanceEdgeInput:
+    upstream_version_id: str
+    edge_type: str
+    evidence: dict[str, object]
+
+
+@dataclass(frozen=True)
+class ProvenanceEdge:
+    id: int
+    downstream_version_id: str
+    upstream_version_id: str
+    edge_type: str
+    evidence_json: str
+    created_at: str
+    actor: str
+
+
+@dataclass(frozen=True)
 class BranchRecord:
     name: str
     head_version_id: str | None
@@ -197,6 +215,22 @@ class SQLiteMetadataRepository(MetadataRepository):
                     FOREIGN KEY (version_id) REFERENCES versions(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS provenance_edges (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    downstream_version_id TEXT NOT NULL,
+                    upstream_version_id TEXT NOT NULL,
+                    edge_type TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL DEFAULT '',
+                    actor TEXT NOT NULL DEFAULT '',
+                    UNIQUE(
+                        downstream_version_id, upstream_version_id, edge_type,
+                        evidence_json
+                    ),
+                    FOREIGN KEY (downstream_version_id) REFERENCES versions(id),
+                    FOREIGN KEY (upstream_version_id) REFERENCES versions(id)
+                );
+
                 CREATE TABLE IF NOT EXISTS branch_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     branch TEXT NOT NULL,
@@ -237,6 +271,10 @@ class SQLiteMetadataRepository(MetadataRepository):
                     ON versions(branch, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_file_refs_hash
                     ON file_refs(cas_hash);
+                CREATE INDEX IF NOT EXISTS idx_provenance_edges_downstream
+                    ON provenance_edges(downstream_version_id, edge_type);
+                CREATE INDEX IF NOT EXISTS idx_provenance_edges_upstream
+                    ON provenance_edges(upstream_version_id, edge_type);
                 CREATE INDEX IF NOT EXISTS idx_branch_events_branch_created
                     ON branch_events(branch, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_lifecycle_events_version_created
@@ -849,8 +887,10 @@ class SQLiteMetadataRepository(MetadataRepository):
         self,
         record: VersionRecord,
         files: Iterable[FileRef],
+        provenance_edges: Iterable[ProvenanceEdgeInput] = (),
     ) -> None:
         file_refs = list(files)
+        edge_inputs = list(provenance_edges)
         with self.connect() as conn:
             conn.execute(
                 """
@@ -917,6 +957,30 @@ class SQLiteMetadataRepository(MetadataRepository):
                     for item in file_refs
                 ],
             )
+            edge_rows = [
+                (
+                    record.id,
+                    edge.upstream_version_id,
+                    edge.edge_type,
+                    json.dumps(
+                        edge.evidence,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    record.created_at,
+                    record.author,
+                )
+                for edge in edge_inputs
+            ]
+            conn.executemany(
+                """
+                INSERT INTO provenance_edges(
+                    downstream_version_id, upstream_version_id, edge_type,
+                    evidence_json, created_at, actor
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                edge_rows,
+            )
             conn.execute(
                 "UPDATE branches SET head_version_id = ? WHERE name = ?",
                 (record.id, record.branch),
@@ -942,6 +1006,14 @@ class SQLiteMetadataRepository(MetadataRepository):
                     "restored_from_version_id": record.restored_from_version_id,
                     "restore_journal_id": record.restore_journal_id,
                     "workspace_generation": record.workspace_generation,
+                    "provenance_edges": [
+                        {
+                            "upstream_version_id": edge.upstream_version_id,
+                            "edge_type": edge.edge_type,
+                            "evidence": edge.evidence,
+                        }
+                        for edge in edge_inputs
+                    ],
                     "input_count": sum(1 for item in file_refs if item.role == "input"),
                     "output_count": sum(1 for item in file_refs if item.role == "output"),
                 },
@@ -1009,6 +1081,18 @@ class SQLiteMetadataRepository(MetadataRepository):
             for row in rows
         ]
 
+    def list_upstream_edges(self, version_id: str) -> list[ProvenanceEdge]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM provenance_edges
+                WHERE downstream_version_id = ?
+                ORDER BY edge_type, upstream_version_id, id
+                """,
+                (version_id,),
+            ).fetchall()
+        return [_provenance_edge_from_row(row) for row in rows]
+
     def list_all_file_refs(self) -> list[tuple[str, FileRef]]:
         with self.connect() as conn:
             rows = conn.execute(
@@ -1072,6 +1156,18 @@ def _branch_from_row(row: sqlite3.Row) -> BranchRecord:
         owner_group=_row_value(row, "owner_group"),
         read_groups=_json_tuple(_row_value(row, "read_groups_json", "[]")),
         write_groups=_json_tuple(_row_value(row, "write_groups_json", "[]")),
+    )
+
+
+def _provenance_edge_from_row(row: sqlite3.Row) -> ProvenanceEdge:
+    return ProvenanceEdge(
+        id=row["id"],
+        downstream_version_id=row["downstream_version_id"],
+        upstream_version_id=row["upstream_version_id"],
+        edge_type=row["edge_type"],
+        evidence_json=row["evidence_json"],
+        created_at=row["created_at"],
+        actor=row["actor"],
     )
 
 

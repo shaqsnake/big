@@ -561,6 +561,111 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         os.chdir(old_cwd)
 
 
+def test_commit_can_record_cross_branch_consumes_lineage(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    alice_workspace = repo_root / "user" / "alice" / "APR"
+    bob_workspace = repo_root / "user" / "bob" / "STA"
+    _write(alice_workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(alice_workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    _write(bob_workspace / "inputs" / "constraints.sdc", "create_clock clk\n")
+    _write(bob_workspace / "outputs" / "timing.rpt", "wns 0.01\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(alice_workspace)
+        upstream_commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "apr output",
+            ],
+        )
+        assert upstream_commit.exit_code == 0, upstream_commit.output
+        upstream_version = re.search(r"version: (v[0-9a-f]+)", upstream_commit.output)
+        assert upstream_version
+
+        os.chdir(bob_workspace)
+        downstream_commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "sta",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--cross-branch-input",
+                f"{upstream_version.group(1)}:outputs/top.def",
+                "--message",
+                "sta consumes apr def",
+            ],
+        )
+        assert downstream_commit.exit_code == 0, downstream_commit.output
+        assert "cross_branch_inputs: 1" in downstream_commit.output
+        downstream_version = re.search(
+            r"version: (v[0-9a-f]+)",
+            downstream_commit.output,
+        )
+        assert downstream_version
+
+        lineage = runner.invoke(main, ["lineage", downstream_version.group(1)])
+        assert lineage.exit_code == 0, lineage.output
+        assert f"0 {downstream_version.group(1)} parent=-" in lineage.output
+        assert "consumes:" in lineage.output
+        assert (
+            f"- {upstream_version.group(1)} edge=consumes "
+            "branch=workspace/default/alice/APR step=place "
+            "path=outputs/top.def"
+        ) in lineage.output
+        assert "branch=workspace/default/bob/STA" in lineage.output
+
+        missing = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "sta",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--cross-branch-input",
+                "vdoesnotexist",
+            ],
+        )
+        assert missing.exit_code != 0
+        assert (
+            "Cross-branch input version not found or ambiguous: vdoesnotexist"
+            in missing.output
+        )
+
+        config, _ = find_config(bob_workspace)
+        metadata = SQLiteMetadataRepository(config.metadata_db)
+        edges = metadata.list_upstream_edges(downstream_version.group(1))
+        assert len(edges) == 1
+        assert edges[0].edge_type == "consumes"
+        assert edges[0].upstream_version_id == upstream_version.group(1)
+
+        audit_verify = runner.invoke(main, ["audit", "verify"])
+        assert audit_verify.exit_code == 0, audit_verify.output
+        assert "events: 2" in audit_verify.output
+        assert "integrity: ok" in audit_verify.output
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_checkout_include_exclude_materializes_file_subset(tmp_path: Path) -> None:
     runner = CliRunner()
     repo_root = tmp_path / "data" / "DemoChip"

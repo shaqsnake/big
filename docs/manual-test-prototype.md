@@ -163,10 +163,34 @@ big repo verify
 
 - `big status` 显示当前 workspace 的 `head` 等于刚才提交的 version ID
 - `big log` 显示刚才的 version ID
-- `big lineage <version>` 显示从目标 version 向前追溯的 parent chain；当前原型只展示 commit parent，不展示后续 Growth 可能引入的 `derived_from`、`consumes` 等跨制品依赖边。
+- `big lineage <version>` 显示从目标 version 向前追溯的 parent chain；如果 commit 时声明了 `--cross-branch-input`，也会在对应节点下显示直接 `consumes` 上游边。
 - `big show --full` 展示 inputs、outputs、SHA-256 摘要和状态 `[Exploring/resident]`
 - `big verify <version>` 输出 `integrity: ok`，表示该 version manifest 引用的 CAS 对象存在、大小一致且 SHA-256 校验通过。
 - `big repo verify` 输出 `integrity: ok`，表示仓库内所有 manifest 引用的 CAS 对象都通过完整性检查；如果失败，可加 `--full` 查看具体 version 和 FileRef。
+
+显式记录跨分支 consumes 输入：
+
+```bash
+cd /mnt/d/Code/App/big/manual-lab/data/WslChip/user/alice/APR
+big commit --step place --inputs 'inputs/**;scripts/**' --outputs 'outputs/**;reports/**'
+# 记下 alice 这次输出的 version，例如 vabc123...
+
+cd /mnt/d/Code/App/big/manual-lab/data/WslChip/user/shaqsnake/APR
+big commit \
+  --step sta \
+  --inputs 'inputs/**;scripts/**' \
+  --outputs 'outputs/**;reports/**' \
+  --cross-branch-input vabc123:outputs/top.def \
+  --message 'consume apr def'
+big lineage <new-version>
+```
+
+期望：
+
+- commit 输出 `cross_branch_inputs: 1`
+- `lineage` 中当前版本的 parent 仍然来自当前 workspace-private ref
+- `lineage` 在该节点下额外输出 `consumes:`，并列出上游 version、`edge=consumes`、上游 branch、step 和 evidence path
+- 该能力只记录显式声明的 consumes 边，不自动扫描 EDA 文件内容，也不做下游影响分析。
 
 ### 用例 3：手动晋升生命周期评审状态
 
@@ -643,6 +667,7 @@ pwd
 - `big repo init --work-root id=path` 创建 3DIC 指针型 work root 配置
 - `big run -- <command>`
 - `big commit`
+- `big commit --cross-branch-input <version>[:path]`
 - `big log`
 - `big lineage`
 - `big show`

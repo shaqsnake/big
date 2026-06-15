@@ -43,7 +43,13 @@ from .config import (
     write_main_config,
     write_pointer_config,
 )
-from .metadata import FileRef, SQLiteMetadataRepository, VersionRecord
+from .metadata import (
+    FileRef,
+    ProvenanceEdge,
+    ProvenanceEdgeInput,
+    SQLiteMetadataRepository,
+    VersionRecord,
+)
 
 
 BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
@@ -339,6 +345,58 @@ def _expand_pattern_args(patterns: tuple[str, ...]) -> list[str]:
             if pattern:
                 expanded.append(pattern)
     return expanded
+
+
+def _resolve_cross_branch_inputs(
+    metadata: SQLiteMetadataRepository,
+    values: tuple[str, ...],
+) -> tuple[ProvenanceEdgeInput, ...]:
+    edges: list[ProvenanceEdgeInput] = []
+    seen: set[tuple[str, str]] = set()
+    for raw_value in values:
+        value = raw_value.strip()
+        if not value:
+            continue
+        version_ref, separator, evidence_path = value.partition(":")
+        version_ref = version_ref.strip()
+        evidence_path = evidence_path.strip() if separator else ""
+        if not version_ref:
+            raise click.ClickException(
+                f"Invalid --cross-branch-input value: {raw_value}"
+            )
+        upstream = metadata.get_version(version_ref)
+        if upstream is None:
+            raise click.ClickException(
+                f"Cross-branch input version not found or ambiguous: {version_ref}"
+            )
+        _require_version_permission(metadata, upstream, "read")
+        key = (upstream.id, evidence_path)
+        if key in seen:
+            continue
+        seen.add(key)
+        evidence: dict[str, object] = {
+            "schema": 1,
+            "source": "cli",
+            "argument": value,
+        }
+        if evidence_path:
+            evidence["path"] = evidence_path
+        edges.append(
+            ProvenanceEdgeInput(
+                upstream_version_id=upstream.id,
+                edge_type="consumes",
+                evidence=evidence,
+            )
+        )
+    return tuple(edges)
+
+
+def _edge_evidence(edge: ProvenanceEdge) -> dict[str, object]:
+    try:
+        parsed = json.loads(edge.evidence_json or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _resolve_patterns(patterns: tuple[str, ...], workspace: Path, label: str) -> list[Path]:
@@ -2538,6 +2596,12 @@ def branch_show_cmd(branch_name: str) -> None:
     default=None,
     help="Explicit branch/ref. Defaults to the current workspace-private ref.",
 )
+@click.option(
+    "--cross-branch-input",
+    "cross_branch_inputs",
+    multiple=True,
+    help="Upstream version consumed by this commit. Use VERSION or VERSION:PATH.",
+)
 @click.option("--verbose", is_flag=True, help="Show manifest summary details.")
 def commit_cmd(
     step: str,
@@ -2545,6 +2609,7 @@ def commit_cmd(
     output_patterns: tuple[str, ...],
     message: str,
     branch: str,
+    cross_branch_inputs: tuple[str, ...],
     verbose: bool,
 ) -> None:
     """Capture inputs/outputs into CAS and create a version manifest."""
@@ -2560,6 +2625,7 @@ def commit_cmd(
         _require_branch_permission(metadata, branch, "write")
     elif branch != workspace_context.default_branch or not branch.startswith("workspace/"):
         raise click.ClickException(f"Branch/ref not found: {branch}")
+    provenance_edges = _resolve_cross_branch_inputs(metadata, cross_branch_inputs)
     restored_from, restore_journal_id, workspace_generation = (
         _read_workspace_restore_provenance(
             workspace_path=workspace_context.workspace_path,
@@ -2595,6 +2661,14 @@ def commit_cmd(
             "branch": branch,
             "workspace_id": workspace_context.workspace_id,
             "step": step,
+            "provenance_edges": [
+                {
+                    "edge_type": edge.edge_type,
+                    "upstream_version_id": edge.upstream_version_id,
+                    "evidence": edge.evidence,
+                }
+                for edge in provenance_edges
+            ],
             "files": [asdict(item) for item in sorted(all_refs, key=lambda x: (x.role, x.path))],
         }
     )
@@ -2623,7 +2697,7 @@ def commit_cmd(
         restore_journal_id=restore_journal_id,
         workspace_generation=workspace_generation,
     )
-    metadata.create_version(record, all_refs)
+    metadata.create_version(record, all_refs, provenance_edges)
     shutil.rmtree(staging_root, ignore_errors=True)
 
     click.echo(f"version: {record.id}")
@@ -2633,6 +2707,8 @@ def commit_cmd(
     click.echo(f"inputs: {len(inputs)}")
     click.echo(f"outputs: {len(outputs)}")
     click.echo(f"recipe_hash: {_short_hash(recipe_hash)}")
+    if provenance_edges:
+        click.echo(f"cross_branch_inputs: {len(provenance_edges)}")
     click.echo(f"capture_mode: {record.capture_mode}")
     click.echo(f"state: [{record.review_state}/{record.retention_state}]")
     if record.restored_from_version_id:
@@ -2787,6 +2863,26 @@ def lineage_cmd(version: str, limit: int) -> None:
             click.echo(f"    restored_from: {item.restored_from_version_id}")
             click.echo(f"    restore_journal: {item.restore_journal_id}")
             click.echo(f"    workspace_generation: {item.workspace_generation}")
+        upstream_edges = metadata.list_upstream_edges(item.id)
+        if upstream_edges:
+            click.echo("    consumes:")
+        for edge in upstream_edges:
+            upstream = metadata.get_version(edge.upstream_version_id)
+            if upstream is None:
+                click.echo(f"      - missing edge_id={edge.id}")
+                continue
+            try:
+                _require_version_permission(metadata, upstream, "read")
+            except click.ClickException:
+                click.echo(f"      - restricted edge_id={edge.id}")
+                continue
+            evidence = _edge_evidence(edge)
+            path = str(evidence.get("path", "-"))
+            click.echo(
+                f"      - {upstream.id} edge={edge.edge_type} "
+                f"branch={upstream.branch} step={upstream.step} "
+                f"path={path} state=[{upstream.review_state}/{upstream.retention_state}]"
+            )
         if item.message:
             click.echo(f"    message: {item.message}")
 
