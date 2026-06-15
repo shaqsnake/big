@@ -18,6 +18,11 @@ import uuid
 
 import click
 
+try:
+    import grp
+except ImportError:  # pragma: no cover - Windows fallback
+    grp = None
+
 from .cas import (
     object_path,
     publish_object,
@@ -104,6 +109,91 @@ def _semantic_role(role: str, path: Path) -> str:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _current_identity() -> dict[str, object]:
+    username = getpass.getuser()
+    uid = os.getuid() if hasattr(os, "getuid") else -1
+    gid = os.getgid() if hasattr(os, "getgid") else -1
+    group_names: set[str] = {username}
+    primary_group = username
+
+    if grp is not None and gid != -1:
+        try:
+            primary_group = grp.getgrgid(gid).gr_name
+            group_names.add(primary_group)
+        except KeyError:
+            pass
+        if hasattr(os, "getgroups"):
+            for item in os.getgroups():
+                try:
+                    group_names.add(grp.getgrgid(item).gr_name)
+                except KeyError:
+                    continue
+
+    group_principals = tuple(sorted(f"group:{item}" for item in group_names if item))
+    return {
+        "username": username,
+        "uid": uid,
+        "gid": gid,
+        "primary_group": primary_group,
+        "primary_group_principal": f"group:{primary_group}",
+        "group_principals": group_principals,
+    }
+
+
+def _normalize_group_principal(value: str) -> str:
+    group = value.strip()
+    if group.startswith("group:"):
+        group = group.removeprefix("group:")
+    if not group or any(item.isspace() for item in group):
+        raise click.ClickException(f"Invalid Linux group principal: {value}")
+    return f"group:{group}"
+
+
+def _default_branch_acl() -> tuple[str, tuple[str, ...], tuple[str, ...]]:
+    identity = _current_identity()
+    owner_group = str(identity["primary_group_principal"])
+    return owner_group, (owner_group,), (owner_group,)
+
+
+def _branch_acl_for_create(
+    metadata: SQLiteMetadataRepository,
+    source_ref: str,
+) -> tuple[str, tuple[str, ...], tuple[str, ...], str]:
+    source = metadata.get_branch(source_ref)
+    if source is not None and (
+        source.owner_group or source.read_groups or source.write_groups
+    ):
+        return (
+            source.owner_group,
+            source.read_groups,
+            source.write_groups,
+            source.name,
+        )
+
+    owner_group, read_groups, write_groups = _default_branch_acl()
+    return owner_group, read_groups, write_groups, "default-current-identity"
+
+
+def _format_groups(groups: tuple[str, ...]) -> str:
+    return ",".join(groups) if groups else "-"
+
+
+def _effective_acl(
+    record: object,
+    identity: dict[str, object],
+) -> tuple[bool, bool, tuple[str, ...], tuple[str, ...]]:
+    user_groups = set(identity["group_principals"])
+    owner_groups = {record.owner_group} if record.owner_group else set()
+    read_groups = set(record.read_groups)
+    write_groups = set(record.write_groups)
+    matched_write = tuple(sorted(user_groups & (owner_groups | write_groups)))
+    matched_read = tuple(sorted(user_groups & (owner_groups | read_groups | write_groups)))
+    owner_match = record.owner == identity["username"]
+    effective_write = bool(matched_write or owner_match)
+    effective_read = effective_write or bool(matched_read)
+    return effective_read, effective_write, matched_read, matched_write
 
 
 def _expand_pattern_args(patterns: tuple[str, ...]) -> list[str]:
@@ -1107,6 +1197,10 @@ def checkout_cmd(
             raise click.ClickException(f"Version not found or ambiguous: {target_ref}")
         branch_name = new_branch
         source_ref = version.id
+        owner_group, read_groups, write_groups, _ = _branch_acl_for_create(
+            metadata,
+            workspace_context.default_branch,
+        )
     else:
         branch_record = metadata.get_branch(target_ref)
         if branch_record is None:
@@ -1123,6 +1217,7 @@ def checkout_cmd(
                 f"Head version not found: {branch_record.head_version_id}"
             )
         branch_name = branch_record.name
+        owner_group, read_groups, write_groups = "", (), ()
 
     all_refs = _dedupe_checkout_refs(metadata.get_file_refs(version.id))
     refs = all_refs
@@ -1187,6 +1282,9 @@ def checkout_cmd(
                     source_ref=source_ref,
                     source_version_id=version.id,
                     owner=getpass.getuser(),
+                    owner_group=owner_group,
+                    read_groups=read_groups,
+                    write_groups=write_groups,
                 )
             except ValueError as exc:
                 raise click.ClickException(str(exc)) from exc
@@ -2063,6 +2161,10 @@ def branch_create_cmd(branch_name: str, source_ref: str | None) -> None:
 
     source_ref = source_ref or _current_workspace_branch(config)
     resolved_source, source_version_id = _resolve_source_ref(metadata, source_ref)
+    owner_group, read_groups, write_groups, acl_source = _branch_acl_for_create(
+        metadata,
+        resolved_source,
+    )
     created_at = _utc_now()
     try:
         metadata.create_branch(
@@ -2073,6 +2175,9 @@ def branch_create_cmd(branch_name: str, source_ref: str | None) -> None:
             source_ref=resolved_source,
             source_version_id=source_version_id,
             owner=getpass.getuser(),
+            owner_group=owner_group,
+            read_groups=read_groups,
+            write_groups=write_groups,
         )
     except ValueError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -2080,6 +2185,10 @@ def branch_create_cmd(branch_name: str, source_ref: str | None) -> None:
     click.echo(f"branch: {branch_name}")
     click.echo(f"head: {source_version_id}")
     click.echo(f"source_ref: {resolved_source}")
+    click.echo(f"acl_source: {acl_source}")
+    click.echo(f"owner_group: {owner_group or '-'}")
+    click.echo(f"read_groups: {_format_groups(read_groups)}")
+    click.echo(f"write_groups: {_format_groups(write_groups)}")
     click.echo(f"kind: named")
 
 
@@ -2102,6 +2211,85 @@ def branch_list_cmd(include_workspace: bool) -> None:
         owner = item.owner or "-"
         source = item.source_ref or "-"
         click.echo(f"{item.kind} {item.name} {head} {owner} {source}")
+
+
+@branch.group("acl")
+def branch_acl() -> None:
+    """Branch ACL commands."""
+
+
+@branch_acl.command("show")
+@click.argument("branch_name")
+@click.option("--effective", is_flag=True, help="Show current identity result.")
+def branch_acl_show_cmd(branch_name: str, effective: bool) -> None:
+    """Show branch Linux group ACL metadata."""
+    _, metadata = _repo_from_cwd()
+    record = metadata.get_branch(branch_name)
+    if record is None:
+        raise click.ClickException(f"Branch/ref not found: {branch_name}")
+
+    click.echo(f"branch: {record.name}")
+    click.echo(f"owner_group: {record.owner_group or '-'}")
+    click.echo(f"read_groups: {_format_groups(record.read_groups)}")
+    click.echo(f"write_groups: {_format_groups(record.write_groups)}")
+    click.echo("write_implies_read: yes")
+
+    if not effective:
+        return
+
+    identity = _current_identity()
+    effective_read, effective_write, matched_read, matched_write = _effective_acl(
+        record,
+        identity,
+    )
+    click.echo(f"user: {identity['username']}")
+    click.echo(f"uid: {identity['uid']}")
+    click.echo(f"gid: {identity['gid']}")
+    click.echo(f"primary_group: {identity['primary_group']}")
+    click.echo(f"groups: {_format_groups(identity['group_principals'])}")
+    click.echo(f"effective_read: {'yes' if effective_read else 'no'}")
+    click.echo(f"effective_write: {'yes' if effective_write else 'no'}")
+    click.echo(f"matched_read_groups: {_format_groups(matched_read)}")
+    click.echo(f"matched_write_groups: {_format_groups(matched_write)}")
+
+
+@branch_acl.command("grant")
+@click.argument("branch_name")
+@click.option("--group", "group_name", required=True, help="Linux group principal.")
+@click.option("--read", "grant_read", is_flag=True, help="Grant read access.")
+@click.option("--write", "grant_write", is_flag=True, help="Grant write access.")
+def branch_acl_grant_cmd(
+    branch_name: str,
+    group_name: str,
+    grant_read: bool,
+    grant_write: bool,
+) -> None:
+    """Grant branch read/write access to a Linux group principal."""
+    if not grant_read and not grant_write:
+        raise click.ClickException("ACL grant requires --read or --write")
+
+    _, metadata = _repo_from_cwd()
+    group = _normalize_group_principal(group_name)
+    try:
+        record = metadata.grant_branch_acl(
+            branch=branch_name,
+            group=group,
+            read=grant_read,
+            write=grant_write,
+            actor=getpass.getuser(),
+            created_at=_utc_now(),
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"branch: {record.name}")
+    click.echo(f"group: {group}")
+    click.echo(f"granted_read: {'yes' if grant_read or grant_write else 'no'}")
+    click.echo(f"granted_write: {'yes' if grant_write else 'no'}")
+    click.echo(f"owner_group: {record.owner_group or '-'}")
+    click.echo(f"read_groups: {_format_groups(record.read_groups)}")
+    click.echo(f"write_groups: {_format_groups(record.write_groups)}")
+    click.echo("acl: updated")
 
 
 @branch.command("events")
@@ -2142,6 +2330,9 @@ def branch_show_cmd(branch_name: str) -> None:
     click.echo(f"kind: {record.kind}")
     click.echo(f"head: {head}")
     click.echo(f"owner: {record.owner or '-'}")
+    click.echo(f"owner_group: {record.owner_group or '-'}")
+    click.echo(f"read_groups: {_format_groups(record.read_groups)}")
+    click.echo(f"write_groups: {_format_groups(record.write_groups)}")
     click.echo(f"created_at: {record.created_at or '-'}")
     click.echo(f"source_ref: {record.source_ref or '-'}")
     click.echo(f"source_version: {record.source_version_id or '-'}")

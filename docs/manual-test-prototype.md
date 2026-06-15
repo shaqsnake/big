@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、验证 `big run` 受管 lease 创建与释放、alice 提交、显式 `restore --in-place` 回到旧版本、restore 后继续 commit 并记录 provenance、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch checkout plan/copied/reused、验证显式部分 checkout、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、验证 `big run` 受管 lease 创建与释放、alice 提交、显式 `restore --in-place` 回到旧版本、restore 后继续 commit 并记录 provenance、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch ACL show/grant、验证 branch checkout plan/copied/reused、验证显式部分 checkout、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
@@ -200,7 +200,7 @@ big promote <version> --to Golden --confirm GOLDEN --message 'tapeout approved'
 
 ### 用例 4：查看和校验审计 hash-chain
 
-每次 `commit`、`branch create`、`reset`、`restore`、`promote` 和 `lifecycle degrade` 都会追加一条本地 audit 事件，并用上一条事件 hash 串成链：
+每次 `commit`、`branch create`、`branch acl grant`、`reset`、`restore`、`promote` 和 `lifecycle degrade` 都会追加一条本地 audit 事件，并用上一条事件 hash 串成链：
 
 ```bash
 big audit log --full
@@ -446,7 +446,24 @@ big branch create feature/place
 
 - 输出 `branch: feature/place`
 - 输出 `source_ref: workspace/default/alice/APR`
-- 输出的 `head` 等于 alice 当前 workspace ref 的 head version。
+- 输出的 `head` 等于 alice 当前 workspace ref 的 head version
+- 输出 `owner_group`、`read_groups` 和 `write_groups`；如果 source branch 没有 ACL，则使用当前进程可见的 primary group 作为默认 group。
+
+查看和调整 branch ACL：
+
+```bash
+big branch acl show feature/place --effective
+big branch acl grant feature/place --group apr_team --read
+big branch acl grant feature/place --group apr_team --write
+```
+
+期望：
+
+- `branch acl show --effective` 输出 branch ACL 中的 Linux group principals
+- 输出当前用户、uid/gid、当前进程可见 groups、`effective_read` 和 `effective_write`
+- `branch acl grant --read` 将 `group:apr_team` 加入 read groups
+- `branch acl grant --write` 将 `group:apr_team` 加入 write groups，同时 write 隐含 read
+- ACL 变更会写入 audit hash-chain；当前原型只实现 ACL 元数据和展示，暂未对 checkout、commit、reset、restore 做权限拦截。
 
 查看命名 branch：
 
@@ -617,10 +634,12 @@ pwd
 - `big branch create`
 - `big branch list`
 - `big branch show`
+- `big branch acl show`
+- `big branch acl grant`
 - `big branch events`
 
 暂未实现：
 
-- Linux groups 权限接入
+- Linux groups 权限 enforcement
 - 3DIC 多 work root checkout/restore 联动
 - recipe_only 的物理 GC、归档搬迁和远端召回

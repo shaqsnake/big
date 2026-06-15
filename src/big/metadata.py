@@ -50,6 +50,9 @@ class BranchRecord:
     source_ref: str
     source_version_id: str
     owner: str
+    owner_group: str = ""
+    read_groups: tuple[str, ...] = ()
+    write_groups: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -154,7 +157,10 @@ class SQLiteMetadataRepository(MetadataRepository):
                     created_at TEXT NOT NULL DEFAULT '',
                     source_ref TEXT NOT NULL DEFAULT '',
                     source_version_id TEXT NOT NULL DEFAULT '',
-                    owner TEXT NOT NULL DEFAULT ''
+                    owner TEXT NOT NULL DEFAULT '',
+                    owner_group TEXT NOT NULL DEFAULT '',
+                    read_groups_json TEXT NOT NULL DEFAULT '[]',
+                    write_groups_json TEXT NOT NULL DEFAULT '[]'
                 );
 
                 CREATE TABLE IF NOT EXISTS versions (
@@ -249,6 +255,19 @@ class SQLiteMetadataRepository(MetadataRepository):
                 "TEXT NOT NULL DEFAULT ''",
             )
             _ensure_column(conn, "branches", "owner", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(conn, "branches", "owner_group", "TEXT NOT NULL DEFAULT ''")
+            _ensure_column(
+                conn,
+                "branches",
+                "read_groups_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
+            _ensure_column(
+                conn,
+                "branches",
+                "write_groups_json",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
             conn.execute(
                 """
                 INSERT OR IGNORE INTO branches(
@@ -307,15 +326,21 @@ class SQLiteMetadataRepository(MetadataRepository):
         source_ref: str,
         source_version_id: str,
         owner: str,
+        owner_group: str = "",
+        read_groups: tuple[str, ...] = (),
+        write_groups: tuple[str, ...] = (),
     ) -> None:
+        read_groups_json = _groups_json(read_groups)
+        write_groups_json = _groups_json(write_groups)
         with self.connect() as conn:
             try:
                 conn.execute(
                     """
                     INSERT INTO branches(
                         name, head_version_id, kind, created_at, source_ref,
-                        source_version_id, owner
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        source_version_id, owner, owner_group, read_groups_json,
+                        write_groups_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         name,
@@ -325,6 +350,9 @@ class SQLiteMetadataRepository(MetadataRepository):
                         source_ref,
                         source_version_id,
                         owner,
+                        owner_group,
+                        read_groups_json,
+                        write_groups_json,
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -342,6 +370,11 @@ class SQLiteMetadataRepository(MetadataRepository):
                     "kind": kind,
                     "source_ref": source_ref,
                     "source_version_id": source_version_id,
+                    "acl": {
+                        "owner_group": owner_group,
+                        "read_groups": sorted(set(read_groups)),
+                        "write_groups": sorted(set(write_groups)),
+                    },
                 },
             )
 
@@ -360,6 +393,62 @@ class SQLiteMetadataRepository(MetadataRepository):
                     """
                 ).fetchall()
         return [_branch_from_row(row) for row in rows]
+
+    def grant_branch_acl(
+        self,
+        branch: str,
+        group: str,
+        read: bool,
+        write: bool,
+        actor: str,
+        created_at: str,
+    ) -> BranchRecord:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM branches WHERE name = ?",
+                (branch,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Branch/ref not found: {branch}")
+
+            record = _branch_from_row(row)
+            read_groups = set(record.read_groups)
+            write_groups = set(record.write_groups)
+            if write:
+                write_groups.add(group)
+                read_groups.add(group)
+            elif read:
+                read_groups.add(group)
+
+            conn.execute(
+                """
+                UPDATE branches
+                SET read_groups_json = ?, write_groups_json = ?
+                WHERE name = ?
+                """,
+                (_groups_json(read_groups), _groups_json(write_groups), branch),
+            )
+            _append_audit_event(
+                conn,
+                action="grant_acl",
+                entity_type="branch",
+                entity_id=branch,
+                actor=actor,
+                created_at=created_at,
+                payload={
+                    "branch": branch,
+                    "group": group,
+                    "read": read or write,
+                    "write": write,
+                    "read_groups": sorted(read_groups),
+                    "write_groups": sorted(write_groups),
+                },
+            )
+            row = conn.execute(
+                "SELECT * FROM branches WHERE name = ?",
+                (branch,),
+            ).fetchone()
+        return _branch_from_row(row)
 
     def reset_branch_head(
         self,
@@ -980,7 +1069,24 @@ def _branch_from_row(row: sqlite3.Row) -> BranchRecord:
         source_ref=_row_value(row, "source_ref"),
         source_version_id=_row_value(row, "source_version_id"),
         owner=_row_value(row, "owner"),
+        owner_group=_row_value(row, "owner_group"),
+        read_groups=_json_tuple(_row_value(row, "read_groups_json", "[]")),
+        write_groups=_json_tuple(_row_value(row, "write_groups_json", "[]")),
     )
+
+
+def _json_tuple(value: str) -> tuple[str, ...]:
+    try:
+        parsed = json.loads(value or "[]")
+    except json.JSONDecodeError:
+        return ()
+    if not isinstance(parsed, list):
+        return ()
+    return tuple(str(item) for item in parsed if str(item))
+
+
+def _groups_json(groups: Iterable[str]) -> str:
+    return json.dumps(sorted(set(groups)), separators=(",", ":"))
 
 
 def _branch_event_from_row(row: sqlite3.Row) -> BranchEvent:

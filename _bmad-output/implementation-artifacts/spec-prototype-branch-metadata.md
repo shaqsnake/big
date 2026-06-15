@@ -25,7 +25,7 @@ context:
 **本切片不实现：**
 - `big checkout`
 - 目录物化或目录切换
-- Linux groups / ACL 权限模型
+- Linux groups / ACL 权限 enforcement；ACL 元数据由 `spec-prototype-branch-acl.md` 覆盖
 - reset / restore
 - branch path template
 

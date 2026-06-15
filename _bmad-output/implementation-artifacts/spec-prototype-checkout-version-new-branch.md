@@ -22,7 +22,7 @@ context:
 - 不带 `--new-branch` 时，直接 checkout version 会被拒绝，避免用户误以为会原地回退。
 - `--plan` 不创建 branch，不创建目录。
 - 真实 checkout 先完成 copy-only 物化，再登记新 branch；不改写源 workspace。
-- 本历史版本 checkout 切片不负责 `restore --in-place`、subset checkout、branch ACL 或 workspace generation。
+- 本历史版本 checkout 切片不负责 `restore --in-place`、subset checkout、branch ACL enforcement 或 workspace generation；新分支 ACL 元数据默认值由 branch ACL 切片覆盖。
 
 ## Acceptance
 

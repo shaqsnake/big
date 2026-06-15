@@ -807,6 +807,122 @@ def test_run_creates_and_releases_managed_lease(tmp_path: Path) -> None:
         os.chdir(old_cwd)
 
 
+def test_branch_acl_grant_show_and_inherit(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "acl base",
+            ],
+        )
+        assert commit.exit_code == 0, commit.output
+
+        create = runner.invoke(main, ["branch", "create", "feature/acl"])
+        assert create.exit_code == 0, create.output
+        assert "acl_source: default-current-identity" in create.output
+        owner_group = re.search(r"owner_group: (group:[^\r\n]+)", create.output)
+        assert owner_group
+        assert f"read_groups: {owner_group.group(1)}" in create.output
+        assert f"write_groups: {owner_group.group(1)}" in create.output
+
+        show_effective = runner.invoke(
+            main, ["branch", "acl", "show", "feature/acl", "--effective"]
+        )
+        assert show_effective.exit_code == 0, show_effective.output
+        assert f"owner_group: {owner_group.group(1)}" in show_effective.output
+        assert "write_implies_read: yes" in show_effective.output
+        assert "effective_read: yes" in show_effective.output
+        assert "effective_write: yes" in show_effective.output
+
+        missing_permission = runner.invoke(
+            main, ["branch", "acl", "grant", "feature/acl", "--group", "apr_team"]
+        )
+        assert missing_permission.exit_code != 0
+        assert "ACL grant requires --read or --write" in missing_permission.output
+
+        grant_read = runner.invoke(
+            main,
+            [
+                "branch",
+                "acl",
+                "grant",
+                "feature/acl",
+                "--group",
+                "apr_team",
+                "--read",
+            ],
+        )
+        assert grant_read.exit_code == 0, grant_read.output
+        assert "group: group:apr_team" in grant_read.output
+        assert "granted_read: yes" in grant_read.output
+        assert "granted_write: no" in grant_read.output
+        assert "group:apr_team" in grant_read.output
+
+        grant_write = runner.invoke(
+            main,
+            [
+                "branch",
+                "acl",
+                "grant",
+                "feature/acl",
+                "--group",
+                "apr_team",
+                "--write",
+            ],
+        )
+        assert grant_write.exit_code == 0, grant_write.output
+        assert "granted_read: yes" in grant_write.output
+        assert "granted_write: yes" in grant_write.output
+        assert "write_groups:" in grant_write.output
+        assert "group:apr_team" in grant_write.output
+
+        create_child = runner.invoke(
+            main, ["branch", "create", "feature/acl-child", "--from", "feature/acl"]
+        )
+        assert create_child.exit_code == 0, create_child.output
+        assert "acl_source: feature/acl" in create_child.output
+        assert "group:apr_team" in create_child.output
+
+        child_acl = runner.invoke(
+            main, ["branch", "acl", "show", "feature/acl-child"]
+        )
+        assert child_acl.exit_code == 0, child_acl.output
+        assert f"owner_group: {owner_group.group(1)}" in child_acl.output
+        assert "group:apr_team" in child_acl.output
+
+        branch_show = runner.invoke(main, ["branch", "show", "feature/acl-child"])
+        assert branch_show.exit_code == 0, branch_show.output
+        assert "owner_group:" in branch_show.output
+        assert "read_groups:" in branch_show.output
+        assert "write_groups:" in branch_show.output
+
+        audit_verify = runner.invoke(main, ["audit", "verify"])
+        assert audit_verify.exit_code == 0, audit_verify.output
+        assert "events: 5" in audit_verify.output
+        assert "integrity: ok" in audit_verify.output
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_restore_in_place_rewrites_clean_workspace_with_journal(
     tmp_path: Path,
 ) -> None:

@@ -250,6 +250,24 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
 
     _run_big(["branch", "create", "feature/place"], alice_workspace, env)
 
+    feature_acl = _run_big(
+        ["branch", "acl", "show", "feature/place", "--effective"],
+        alice_workspace,
+        env,
+    )
+    _expect_contains(feature_acl, "write_implies_read: yes")
+    _expect_contains(feature_acl, "effective_read: yes")
+    _expect_contains(feature_acl, "effective_write: yes")
+
+    feature_acl_grant = _run_big(
+        ["branch", "acl", "grant", "feature/place", "--group", "apr_team", "--read"],
+        alice_workspace,
+        env,
+    )
+    _expect_contains(feature_acl_grant, "group: group:apr_team")
+    _expect_contains(feature_acl_grant, "granted_read: yes")
+    _expect_contains(feature_acl_grant, "granted_write: no")
+
     checkout_plan = _run_big(["checkout", "feature/place", "--plan"], alice_workspace, env)
     _expect_contains(checkout_plan, f"version: {alice_version}")
     _expect_contains(checkout_plan, "materialization: plan-only")
@@ -434,7 +452,7 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     _expect_contains(stats, "recipe_only: versions=1")
 
     audit_verify = _run_big(["audit", "verify"], alice_workspace, env)
-    _expect_contains(audit_verify, "events: 10")
+    _expect_contains(audit_verify, "events: 11")
     _expect_contains(audit_verify, "integrity: ok")
 
     audit_log = _run_big(["audit", "log", "--limit", "10"], alice_workspace, env)
@@ -446,6 +464,7 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     _expect_contains(audit_log, f"promote version {alice_version}")
     _expect_contains(audit_log, "create_branch branch recipe/shaq")
     _expect_contains(audit_log, "create_branch branch feature/place")
+    _expect_contains(audit_log, "grant_acl branch feature/place")
     print("manual smoke: ok")
 
 
