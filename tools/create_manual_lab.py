@@ -17,6 +17,7 @@ FIXTURE_TEMPLATES = {
         "read_verilog inputs/top.v\n"
         "place_design\n"
     ),
+    "user/{user}/markers/APR/place.done": "status=done\n",
     "user/{user}/APR/outputs/top_placed.def": (
         "VERSION 5.8 ;\n"
         "DESIGN top ;\n"

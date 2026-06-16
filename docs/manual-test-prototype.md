@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、验证 `big run` 受管 lease 创建与释放、alice 提交、显式 `restore --in-place` 回到旧版本、restore 后继续 commit 并记录 provenance、查看 parent-chain lineage、晋升 Candidate 并检查 outbox pending 事件、创建 `feature/place`、验证 branch ACL show/grant、验证 branch checkout plan/copied/reused、验证显式部分 checkout、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、配置并验证外部 success marker、验证 `shell-init` 输出、验证 `big run` 受管 lease 创建与释放、alice 提交、显式 `restore --in-place` 回到旧版本、restore 后继续 commit 并记录 provenance、查看 parent-chain lineage、晋升 Candidate 并检查 outbox pending 事件、创建 `feature/place`、验证 branch ACL show/grant、验证 branch checkout plan/copied/reused、验证显式部分 checkout、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
@@ -65,6 +65,15 @@ manual-lab/data/WslChip/user/shaqsnake/APR
 
 ```bash
 big repo init manual-lab/data/WslChip --repo-id WslChip
+```
+
+为外部流程 success marker 配置一个项目约定。这里的 marker 文件由 `tools/create_manual_lab.py` 生成在用户目录下的独立 marker 区域，实际接入时可以由 PDS 或其他流程系统在自己的目录规则下生成：
+
+```bash
+cat >> manual-lab/data/WslChip/big.toml <<'EOF'
+[step_markers]
+success = "../markers/{flow}/{step}.done"
+EOF
 ```
 
 可选：初始化 3DIC 四个并行 work root：
@@ -116,7 +125,8 @@ big status
 big commit --step place \
   --inputs 'inputs/**;scripts/**' \
   --outputs 'outputs/**;reports/**' \
-  --message 'initial place snapshot'
+  --message 'initial place snapshot' \
+  --require-marker
 ```
 
 期望：
@@ -124,6 +134,7 @@ big commit --step place \
 - 输出 `version: v...`
 - 输出 `branch: workspace/default/alice/APR`
 - 输出 `inputs: 3` 和 `outputs: 2`
+- 输出 `success_marker: found` 和解析后的 `success_marker_path`
 - `manual-lab/data/WslChip/.big/cas/objects/` 下出现 CAS 对象
 
 检查 CAS 对象是否仍有写权限：

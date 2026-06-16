@@ -663,6 +663,34 @@ def _resolve_cli_workspace_context(config: RepoConfig, path: Path) -> WorkspaceC
     return resolve_workspace_context(config, path)
 
 
+def _resolve_success_marker_path(
+    config: RepoConfig,
+    workspace_context: WorkspaceContext,
+    step: str,
+) -> Path:
+    if not config.step_success_marker:
+        raise click.ClickException(
+            "No step success marker configured; set [step_markers].success in big.toml"
+        )
+    try:
+        rendered = config.step_success_marker.format(
+            step=step,
+            user=workspace_context.user,
+            flow=workspace_context.flow,
+            workspace=workspace_context.workspace_id,
+            work_root=workspace_context.work_root.id,
+        )
+    except KeyError as exc:
+        raise click.ClickException(
+            f"Unknown success marker placeholder: {{{exc.args[0]}}}"
+        ) from exc
+
+    marker_path = Path(rendered)
+    if not marker_path.is_absolute():
+        marker_path = workspace_context.workspace_path / marker_path
+    return marker_path.resolve()
+
+
 def _resolve_source_ref(
     metadata: SQLiteMetadataRepository,
     source_ref: str,
@@ -2930,6 +2958,11 @@ def branch_show_cmd(branch_name: str) -> None:
     multiple=True,
     help="Upstream version consumed by this commit. Use VERSION or VERSION:PATH.",
 )
+@click.option(
+    "--require-marker",
+    is_flag=True,
+    help="Require the configured step success marker before capturing files.",
+)
 @click.option("--verbose", is_flag=True, help="Show manifest summary details.")
 def commit_cmd(
     step: str,
@@ -2938,6 +2971,7 @@ def commit_cmd(
     message: str,
     branch: str,
     cross_branch_inputs: tuple[str, ...],
+    require_marker: bool,
     verbose: bool,
 ) -> None:
     """Capture inputs/outputs into CAS and create a version manifest."""
@@ -2961,6 +2995,21 @@ def commit_cmd(
             branch_name=branch,
         )
     )
+    success_marker_path: Path | None = None
+    if require_marker:
+        success_marker_path = _resolve_success_marker_path(
+            config,
+            workspace_context,
+            step,
+        )
+        if not success_marker_path.exists():
+            raise click.ClickException(
+                f"configured step success marker not found: {success_marker_path}"
+            )
+        if not success_marker_path.is_file():
+            raise click.ClickException(
+                f"configured step success marker is not a file: {success_marker_path}"
+            )
     inputs = _resolve_patterns(input_patterns, workspace, "input")
     outputs = _resolve_patterns(output_patterns, workspace, "output")
 
@@ -2989,6 +3038,7 @@ def commit_cmd(
             "branch": branch,
             "workspace_id": workspace_context.workspace_id,
             "step": step,
+            "success_marker": str(success_marker_path) if success_marker_path else "",
             "provenance_edges": [
                 {
                     "edge_type": edge.edge_type,
@@ -3038,6 +3088,9 @@ def commit_cmd(
     if provenance_edges:
         click.echo(f"cross_branch_inputs: {len(provenance_edges)}")
     click.echo(f"capture_mode: {record.capture_mode}")
+    if success_marker_path:
+        click.echo("success_marker: found")
+        click.echo(f"success_marker_path: {success_marker_path}")
     click.echo(f"state: [{record.review_state}/{record.retention_state}]")
     if record.restored_from_version_id:
         click.echo(f"restored_from: {record.restored_from_version_id}")

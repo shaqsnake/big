@@ -9,10 +9,11 @@ def test_create_manual_lab_is_idempotent(tmp_path: Path) -> None:
     root = tmp_path / "manual-lab" / "data" / "WslChip"
     written = create_manual_lab(root)
 
-    assert len(written) == 10
+    assert len(written) == 12
     assert (root / "user" / "alice" / "APR" / "inputs" / "top.v").exists()
     assert (root / "user" / "shaqsnake" / "APR" / "inputs" / "top.v").exists()
     assert (root / "user" / "alice" / "APR" / "scripts" / "place.tcl").exists()
+    assert (root / "user" / "alice" / "markers" / "APR" / "place.done").exists()
     assert create_manual_lab(root) == []
 
 
@@ -24,5 +25,5 @@ def test_create_manual_lab_can_overwrite_known_fixtures(tmp_path: Path) -> None:
 
     written = create_manual_lab(root, overwrite=True)
 
-    assert len(written) == 10
+    assert len(written) == 12
     assert top.read_text(encoding="utf-8") == "module top;\nendmodule\n"

@@ -31,6 +31,7 @@ class RepoConfig:
     work_roots: tuple[WorkRoot, ...]
     acl_templates: tuple[AclTemplate, ...] = ()
     acl_validate_groups: bool = False
+    step_success_marker: str = ""
 
     @property
     def big_dir(self) -> Path:
@@ -163,6 +164,15 @@ def _load_acl_validate_groups(data: dict[str, object]) -> bool:
     return value
 
 
+def _load_step_success_marker(data: dict[str, object]) -> str:
+    raw_markers = data.get("step_markers", {})
+    if raw_markers is None:
+        return ""
+    if not isinstance(raw_markers, dict):
+        raise ValueError("step_markers must be declared with [step_markers]")
+    return str(raw_markers.get("success", "")).strip()
+
+
 def load_config(config_path: Path) -> RepoConfig:
     data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     repo = data["repo"]
@@ -198,6 +208,7 @@ def load_config(config_path: Path) -> RepoConfig:
         work_roots=work_roots,
         acl_templates=_load_acl_templates(data),
         acl_validate_groups=_load_acl_validate_groups(data),
+        step_success_marker=_load_step_success_marker(data),
     )
 
 

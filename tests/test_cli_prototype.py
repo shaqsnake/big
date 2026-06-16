@@ -1938,6 +1938,91 @@ def test_recipe_only_checkout_materializes_inputs_only(tmp_path: Path) -> None:
         os.chdir(old_cwd)
 
 
+def test_commit_require_marker_checks_configured_success_marker(
+    tmp_path: Path,
+) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        missing_config = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--require-marker",
+            ],
+        )
+        assert missing_config.exit_code != 0
+        assert "No step success marker configured" in missing_config.output
+
+        config_path = repo_root / "big.toml"
+        config_path.write_text(
+            config_path.read_text(encoding="utf-8")
+            + '\n[step_markers]\nsuccess = "../markers/{flow}/{step}.done"\n',
+            encoding="utf-8",
+        )
+
+        missing_marker = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--require-marker",
+            ],
+        )
+        assert missing_marker.exit_code != 0
+        assert "configured step success marker not found" in missing_marker.output
+        marker_path = repo_root / "user" / "alice" / "markers" / "APR" / "place.done"
+        assert str(marker_path) in missing_marker.output
+
+        _write(marker_path, "ok\n")
+        commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--require-marker",
+            ],
+        )
+        assert commit.exit_code == 0, commit.output
+        assert "success_marker: found" in commit.output
+        assert (
+            f"success_marker_path: {marker_path}"
+            in commit.output
+        )
+        assert "capture_mode: best_effort" in commit.output
+
+        log = runner.invoke(main, ["log"])
+        assert log.exit_code == 0, log.output
+        assert len(re.findall(r"^v[0-9a-f]+ ", log.output, re.MULTILINE)) == 1
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_shell_init_outputs_checkout_wrapper() -> None:
     runner = CliRunner()
     for shell in ("bash", "zsh"):
