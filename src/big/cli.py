@@ -1691,12 +1691,25 @@ def repo_verify_cmd(show_full: bool) -> None:
     config, metadata = _repo_from_cwd()
     summary = metadata.storage_summary()
     refs = metadata.list_all_file_refs()
-    missing, size_mismatch, hash_mismatch = _verify_file_refs(config.cas_dir, refs)
+    required_refs, optional_outputs = _required_refs_for_verify(metadata, refs)
+    (
+        missing,
+        size_mismatch,
+        hash_mismatch,
+        reclaimed_outputs,
+    ) = _verify_refs_with_optional_outputs(
+        config.cas_dir,
+        required_refs,
+        optional_outputs,
+    )
     failures = len(missing) + len(size_mismatch) + len(hash_mismatch)
 
     click.echo(f"repo: {config.repo_id}")
     click.echo(f"versions: {summary.versions}")
     click.echo(f"file_refs: {len(refs)}")
+    click.echo(f"required_file_refs: {len(required_refs)}")
+    click.echo(f"optional_outputs: {len(optional_outputs)}")
+    click.echo(f"reclaimed_outputs: {reclaimed_outputs}")
     click.echo(f"missing: {len(missing)}")
     click.echo(f"size_mismatch: {len(size_mismatch)}")
     click.echo(f"hash_mismatch: {len(hash_mismatch)}")
@@ -1724,6 +1737,153 @@ def _scan_cas_objects(cas_dir: Path) -> tuple[int, int]:
             count += 1
             total_bytes += path.stat().st_size
     return count, total_bytes
+
+
+def _version_cache_get(
+    metadata: SQLiteMetadataRepository,
+    cache: dict[str, VersionRecord | None],
+    version_id: str,
+) -> VersionRecord | None:
+    if version_id not in cache:
+        cache[version_id] = metadata.get_version(version_id)
+    return cache[version_id]
+
+
+def _is_reclaimable_recipe_output_hash(
+    metadata: SQLiteMetadataRepository,
+    all_refs: list[tuple[str, FileRef]],
+    version_cache: dict[str, VersionRecord | None],
+    cas_hash: str,
+) -> bool:
+    for version_id, ref in all_refs:
+        if ref.cas_hash != cas_hash:
+            continue
+        version = _version_cache_get(metadata, version_cache, version_id)
+        if version is None:
+            return False
+        if version.retention_state != "recipe_only" or ref.role != "output":
+            return False
+    return True
+
+
+def _reclaim_recipe_only_outputs(
+    config: RepoConfig,
+    metadata: SQLiteMetadataRepository,
+    version_id: str,
+) -> dict[str, int]:
+    version = metadata.get_version(version_id)
+    if version is None or version.retention_state != "recipe_only":
+        raise click.ClickException(f"Version is not recipe_only: {version_id}")
+
+    all_refs = metadata.list_all_file_refs()
+    version_cache: dict[str, VersionRecord | None] = {version.id: version}
+    output_refs = [
+        ref
+        for ref in metadata.get_file_refs(version.id)
+        if ref.role == "output"
+    ]
+    seen_hashes: set[str] = set()
+    stats = {
+        "candidates": len(output_refs),
+        "objects": 0,
+        "bytes": 0,
+        "missing": 0,
+        "skipped_shared": 0,
+    }
+    for ref in output_refs:
+        if ref.cas_hash in seen_hashes:
+            continue
+        seen_hashes.add(ref.cas_hash)
+        if not _is_reclaimable_recipe_output_hash(
+            metadata,
+            all_refs,
+            version_cache,
+            ref.cas_hash,
+        ):
+            stats["skipped_shared"] += 1
+            continue
+        path = object_path(config.cas_dir, ref.cas_hash)
+        if not path.exists():
+            stats["missing"] += 1
+            continue
+        size = path.stat().st_size
+        try:
+            path.chmod(path.stat().st_mode | 0o200)
+            path.unlink()
+        except OSError as exc:
+            raise click.ClickException(f"Failed to reclaim CAS object: {path}") from exc
+        stats["objects"] += 1
+        stats["bytes"] += size
+    return stats
+
+
+def _print_gc_stats(stats: dict[str, int]) -> None:
+    click.echo(f"gc_candidates: {stats['candidates']}")
+    click.echo(f"gc_objects: {stats['objects']}")
+    click.echo(f"gc_bytes: {stats['bytes']}")
+    click.echo(f"gc_missing: {stats['missing']}")
+    click.echo(f"gc_skipped_shared: {stats['skipped_shared']}")
+
+
+def _required_refs_for_verify(
+    metadata: SQLiteMetadataRepository,
+    refs: list[tuple[str, FileRef]],
+) -> tuple[list[tuple[str, FileRef]], list[tuple[str, FileRef]]]:
+    required: list[tuple[str, FileRef]] = []
+    optional_outputs: list[tuple[str, FileRef]] = []
+    version_cache: dict[str, VersionRecord | None] = {}
+    for version_id, ref in refs:
+        version = _version_cache_get(metadata, version_cache, version_id)
+        if (
+            version is not None
+            and version.retention_state == "recipe_only"
+            and ref.role == "output"
+        ):
+            optional_outputs.append((version_id, ref))
+            continue
+        required.append((version_id, ref))
+    return required, optional_outputs
+
+
+def _missing_ref_count(cas_dir: Path, refs: list[tuple[str, FileRef]]) -> int:
+    return sum(1 for _, ref in refs if not object_path(cas_dir, ref.cas_hash).exists())
+
+
+def _verify_refs_with_optional_outputs(
+    cas_dir: Path,
+    required_refs: list[tuple[str, FileRef]],
+    optional_outputs: list[tuple[str, FileRef]],
+) -> tuple[
+    list[tuple[str, FileRef]],
+    list[tuple[str, FileRef, int]],
+    list[tuple[str, FileRef, str]],
+    int,
+]:
+    reclaimed_outputs = _missing_ref_count(cas_dir, optional_outputs)
+    optional_existing = [
+        (version_id, ref)
+        for version_id, ref in optional_outputs
+        if object_path(cas_dir, ref.cas_hash).exists()
+    ]
+
+    missing, size_mismatch, hash_mismatch = _verify_file_refs(
+        cas_dir,
+        required_refs,
+    )
+    (
+        optional_missing,
+        optional_size_mismatch,
+        optional_hash_mismatch,
+    ) = _verify_file_refs(
+        cas_dir,
+        optional_existing,
+    )
+    return (
+        missing,
+        size_mismatch + optional_size_mismatch,
+        hash_mismatch + optional_hash_mismatch,
+        reclaimed_outputs + len(optional_missing),
+    )
 
 
 def _verify_file_refs(
@@ -2341,14 +2501,20 @@ def promote_cmd(version: str, target_state: str, message: str, confirm: str) -> 
     default="",
     help="Required as RECIPE_ONLY when degrading to recipe_only.",
 )
+@click.option(
+    "--gc-outputs",
+    is_flag=True,
+    help="Physically reclaim output CAS objects that are safe to remove.",
+)
 def lifecycle_degrade_cmd(
     version: str,
     target_retention: str,
     message: str,
     confirm: str,
+    gc_outputs: bool,
 ) -> None:
-    """Mark an Exploring version as recipe_only without deleting CAS objects."""
-    _, metadata = _repo_from_cwd()
+    """Mark an Exploring version as recipe_only and optionally reclaim outputs."""
+    config, metadata = _repo_from_cwd()
     record = metadata.get_version(version)
     if record is None:
         raise click.ClickException(f"Version not found or ambiguous: {version}")
@@ -2366,7 +2532,12 @@ def lifecycle_degrade_cmd(
         click.echo(f"old_state: [{record.review_state}/{record.retention_state}]")
         click.echo(f"new_state: [{record.review_state}/{record.retention_state}]")
         click.echo("degrade: no-op")
-        click.echo("physical_gc: not-implemented")
+        if gc_outputs:
+            gc_stats = _reclaim_recipe_only_outputs(config, metadata, record.id)
+            click.echo("physical_gc: reclaimed")
+            _print_gc_stats(gc_stats)
+        else:
+            click.echo("physical_gc: skipped")
         return
     if record.retention_state != "resident":
         raise click.ClickException(
@@ -2393,7 +2564,12 @@ def lifecycle_degrade_cmd(
     click.echo(f"old_state: [{record.review_state}/{record.retention_state}]")
     click.echo(f"new_state: [{record.review_state}/{target_retention}]")
     click.echo("degrade: moved")
-    click.echo("physical_gc: not-implemented")
+    if gc_outputs:
+        gc_stats = _reclaim_recipe_only_outputs(config, metadata, record.id)
+        click.echo("physical_gc: reclaimed")
+        _print_gc_stats(gc_stats)
+    else:
+        click.echo("physical_gc: skipped")
 
 
 @lifecycle.command("events")
@@ -3101,13 +3277,26 @@ def verify_cmd(version: str, show_full: bool) -> None:
     _require_version_permission(metadata, record, "read")
 
     refs = metadata.get_file_refs(record.id)
-    missing, size_mismatch, hash_mismatch = _verify_file_refs(
-        config.cas_dir,
+    required_refs, optional_outputs = _required_refs_for_verify(
+        metadata,
         [(record.id, ref) for ref in refs],
+    )
+    (
+        missing,
+        size_mismatch,
+        hash_mismatch,
+        reclaimed_outputs,
+    ) = _verify_refs_with_optional_outputs(
+        config.cas_dir,
+        required_refs,
+        optional_outputs,
     )
     failures = len(missing) + len(size_mismatch) + len(hash_mismatch)
     click.echo(f"version: {record.id}")
     click.echo(f"files: {len(refs)}")
+    click.echo(f"required_files: {len(required_refs)}")
+    click.echo(f"optional_outputs: {len(optional_outputs)}")
+    click.echo(f"reclaimed_outputs: {reclaimed_outputs}")
     click.echo(f"missing: {len(missing)}")
     click.echo(f"size_mismatch: {len(size_mismatch)}")
     click.echo(f"hash_mismatch: {len(hash_mismatch)}")

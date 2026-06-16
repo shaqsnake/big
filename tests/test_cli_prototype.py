@@ -1819,6 +1819,7 @@ def test_recipe_only_checkout_materializes_inputs_only(tmp_path: Path) -> None:
                 "recipe_only",
                 "--confirm",
                 "RECIPE_ONLY",
+                "--gc-outputs",
                 "--message",
                 "retire outputs",
             ],
@@ -1827,11 +1828,28 @@ def test_recipe_only_checkout_materializes_inputs_only(tmp_path: Path) -> None:
         assert "old_state: [Exploring/resident]" in degrade.output
         assert "new_state: [Exploring/recipe_only]" in degrade.output
         assert "degrade: moved" in degrade.output
-        assert "physical_gc: not-implemented" in degrade.output
+        assert "physical_gc: reclaimed" in degrade.output
+        assert "gc_candidates: 2" in degrade.output
+        assert "gc_objects: 2" in degrade.output
+        assert "gc_skipped_shared: 0" in degrade.output
 
         show = runner.invoke(main, ["show", version.group(1)])
         assert show.exit_code == 0, show.output
         assert "state: [Exploring/recipe_only]" in show.output
+
+        verify = runner.invoke(main, ["verify", version.group(1)])
+        assert verify.exit_code == 0, verify.output
+        assert "required_files: 2" in verify.output
+        assert "optional_outputs: 2" in verify.output
+        assert "reclaimed_outputs: 2" in verify.output
+        assert "integrity: ok" in verify.output
+
+        repo_verify = runner.invoke(main, ["repo", "verify"])
+        assert repo_verify.exit_code == 0, repo_verify.output
+        assert "required_file_refs: 2" in repo_verify.output
+        assert "optional_outputs: 2" in repo_verify.output
+        assert "reclaimed_outputs: 2" in repo_verify.output
+        assert "integrity: ok" in repo_verify.output
 
         lifecycle_events = runner.invoke(
             main, ["lifecycle", "events", version.group(1)]
@@ -2153,6 +2171,77 @@ def test_verify_reports_missing_cas_object(tmp_path: Path) -> None:
         assert "file_refs: 2" in repo_verify.output
         assert "integrity: failed" in repo_verify.output
         assert f"missing {version.group(1)} " in repo_verify.output
+        assert "Repository CAS integrity verification failed" in repo_verify.output
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_recipe_only_verify_checks_existing_optional_outputs(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+            ],
+        )
+        assert commit.exit_code == 0, commit.output
+        version = re.search(r"version: (v[0-9a-f]+)", commit.output)
+        assert version
+
+        degrade = runner.invoke(
+            main,
+            [
+                "lifecycle",
+                "degrade",
+                version.group(1),
+                "--to",
+                "recipe_only",
+                "--confirm",
+                "RECIPE_ONLY",
+            ],
+        )
+        assert degrade.exit_code == 0, degrade.output
+        assert "physical_gc: skipped" in degrade.output
+
+        config, _ = find_config(workspace)
+        metadata = SQLiteMetadataRepository(config.metadata_db)
+        refs = metadata.get_file_refs(version.group(1))
+        output_ref = next(ref for ref in refs if ref.role == "output")
+        output_object = object_path(config.cas_dir, output_ref.cas_hash)
+        output_object.chmod(0o666)
+        output_object.write_text("corrupt optional output\n", encoding="utf-8")
+
+        verify = runner.invoke(main, ["verify", version.group(1), "--full"])
+        assert verify.exit_code != 0
+        assert "optional_outputs: 1" in verify.output
+        assert "reclaimed_outputs: 0" in verify.output
+        assert "size_mismatch: 1" in verify.output
+        assert "integrity: failed" in verify.output
+        assert "CAS integrity verification failed" in verify.output
+
+        repo_verify = runner.invoke(main, ["repo", "verify", "--full"])
+        assert repo_verify.exit_code != 0
+        assert "optional_outputs: 1" in repo_verify.output
+        assert "reclaimed_outputs: 0" in repo_verify.output
+        assert "size_mismatch: 1" in repo_verify.output
+        assert "integrity: failed" in repo_verify.output
         assert "Repository CAS integrity verification failed" in repo_verify.output
     finally:
         os.chdir(old_cwd)

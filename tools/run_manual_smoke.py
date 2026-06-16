@@ -405,7 +405,7 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     )
     _expect_contains(shaq_degrade, "old_state: [Exploring/resident]")
     _expect_contains(shaq_degrade, "new_state: [Exploring/recipe_only]")
-    _expect_contains(shaq_degrade, "physical_gc: not-implemented")
+    _expect_contains(shaq_degrade, "physical_gc: skipped")
 
     _run_big(["branch", "create", "recipe/shaq"], shaq_workspace, env)
 

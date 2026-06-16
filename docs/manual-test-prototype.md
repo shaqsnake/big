@@ -435,9 +435,26 @@ big lifecycle events <version>
 
 - `big lifecycle degrade` 输出 `old_state: [Exploring/resident]`
 - `big lifecycle degrade` 输出 `new_state: [Exploring/recipe_only]`
-- 输出 `physical_gc: not-implemented`，表示当前原型只更新元数据状态，不删除、不搬迁 CAS 对象
+- 默认输出 `physical_gc: skipped`，表示本次只更新元数据状态，不删除 CAS 对象
 - `big show <version>` 展示 `state: [Exploring/recipe_only]`
 - `big lifecycle events <version>` 展示 `Exploring->Exploring` 和 `resident->recipe_only`
+
+如果要立刻回收只被 `recipe_only` 输出引用的 CAS 对象，可以显式执行：
+
+```bash
+big lifecycle degrade <version> \
+  --to recipe_only \
+  --confirm RECIPE_ONLY \
+  --gc-outputs \
+  --message 'retire outputs and reclaim output CAS'
+```
+
+期望：
+
+- 输出 `physical_gc: reclaimed`
+- 输出 `gc_candidates`、`gc_objects`、`gc_bytes`、`gc_missing` 和 `gc_skipped_shared`
+- 只会删除未被 resident version、input FileRef 或其它非 recipe_only-output 引用的 CAS 对象
+- `big verify <version>` 和 `big repo verify` 会把已回收的 recipe_only outputs 计入 `reclaimed_outputs`；inputs 必须完整，仍存在于 CAS 中的 recipe_only outputs 也必须通过 size/hash 校验。
 
 为这个 recipe-only version 创建命名 branch，并验证 checkout 投影：
 
@@ -705,4 +722,4 @@ pwd
 
 - repo-wide admin policy
 - 3DIC 多 work root checkout/restore 联动
-- recipe_only 的物理 GC、归档搬迁和远端召回
+- recipe_only 的归档搬迁和远端召回

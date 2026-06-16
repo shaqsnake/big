@@ -15,11 +15,12 @@ context:
 
 **问题：** 当前原型已经能区分 `review_state` 和 `retention_state`，但还不能验证“把低价值探索版本降级为 recipe_only 后，后续 checkout 不再默认物化大体量输出文件”的最小体验。用户需要看到该状态如何落入 metadata、audit、lifecycle events 和 checkout 输出。
 
-**方案：** 增加 `big lifecycle degrade <version> --to recipe_only --confirm RECIPE_ONLY`。该命令只允许 `Exploring/resident` version 降级为 `Exploring/recipe_only`，写入 lifecycle event 和 audit hash-chain，不删除、不搬迁 CAS 对象。对 `recipe_only` version 执行 `big checkout <branch>` 时，只物化 `role=input` 的 FileRef，输出 `checkout_scope: inputs-only`、`omitted_outputs: ...`，并在 `.big-checkout.json` 中记录 `materialization=partial`。
+**方案：** 增加 `big lifecycle degrade <version> --to recipe_only --confirm RECIPE_ONLY`。该命令只允许 `Exploring/resident` version 降级为 `Exploring/recipe_only`，写入 lifecycle event 和 audit hash-chain。默认不删除 CAS 对象；若用户显式传入 `--gc-outputs`，原型会删除只被 `recipe_only` output FileRef 引用、且不被任何 resident version 或 input FileRef 引用的 CAS 对象。对 `recipe_only` version 执行 `big checkout <branch>` 时，只物化 `role=input` 的 FileRef，输出 `checkout_scope: inputs-only`、`omitted_outputs: ...`，并在 `.big-checkout.json` 中记录 `materialization=partial`。
 
 ## Boundaries
 
-- 本切片不实现物理 GC、归档搬迁、远端召回或 CAS 对象删除。
+- 默认 `degrade` 不删除或搬迁 CAS 对象；`--gc-outputs` 只回收安全的 recipe_only output CAS 对象。
+- 本切片不实现归档搬迁、远端召回或完整 storage policy worker。
 - 本切片不允许降级 `Candidate`、`Pinned` 或 `Golden` version。
 - 本切片不改变完整 `resident` version 的 checkout 行为；它们仍使用 `materialization=copy` 并复制 inputs 和 outputs。
 - `recipe_only` checkout 的 partial 目录仍是用户私有物化目录，不作为共享发布目录。
@@ -30,6 +31,15 @@ context:
 - Given 一个 `Exploring/resident` version
 - When 执行 `big lifecycle degrade <version> --to recipe_only --confirm RECIPE_ONLY --message 'retire outputs'`
 - Then version 状态变为 `[Exploring/recipe_only]`，并记录 `resident->recipe_only` lifecycle event 和 `degrade` audit event。
+
+- Given 一个 `Exploring/resident` version
+- When 执行 `big lifecycle degrade <version> --to recipe_only --confirm RECIPE_ONLY --gc-outputs`
+- Then 系统只删除未被 resident version、input FileRef 或其它非 recipe_only-output 引用的 CAS 对象
+- And CLI 输出 `physical_gc: reclaimed`、`gc_objects`、`gc_bytes` 和 `gc_skipped_shared`。
+
+- Given recipe_only output CAS 已被回收
+- When 执行 `big verify <version>` 或 `big repo verify`
+- Then 已回收 outputs 计入 `reclaimed_outputs`，但不导致 integrity failure；inputs 仍必须完整，仍存在的 recipe_only outputs 仍必须通过 size/hash 校验。
 
 - Given 一个 `Candidate/resident`、`Pinned/resident` 或 `Golden/resident` version
 - When 执行 `big lifecycle degrade <version> --to recipe_only --confirm RECIPE_ONLY`
