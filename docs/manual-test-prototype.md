@@ -44,7 +44,7 @@ make test
 make smoke
 ```
 
-`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、验证 `big run` 受管 lease 创建与释放、alice 提交、显式 `restore --in-place` 回到旧版本、restore 后继续 commit 并记录 provenance、查看 parent-chain lineage、晋升 Candidate、创建 `feature/place`、验证 branch ACL show/grant、验证 branch checkout plan/copied/reused、验证显式部分 checkout、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
+`make smoke` 会先重置 `manual-lab/data/WslChip`，再通过 `PYTHONPATH=src python tools/run_manual_smoke.py ...` 执行一轮端到端 smoke：初始化仓库、验证 `shell-init` 输出、验证 `big run` 受管 lease 创建与释放、alice 提交、显式 `restore --in-place` 回到旧版本、restore 后继续 commit 并记录 provenance、查看 parent-chain lineage、晋升 Candidate 并检查 outbox pending 事件、创建 `feature/place`、验证 branch ACL show/grant、验证 branch checkout plan/copied/reused、验证显式部分 checkout、验证历史版本 `--new-branch` checkout、shaqsnake 提交、验证两个用户的默认历史隔离、将 shaqsnake 的 Exploring version 标记为 `recipe_only` 并验证 inputs-only checkout、确认 `main` 仍为空，并检查 repo stats 与 audit hash-chain。它不依赖 `big` console script，但当前 Python 环境仍需要安装依赖，推荐先执行 `make install-dev`。
 
 ## WSL / Linux 手工用例
 
@@ -206,6 +206,7 @@ big impact vabc123 --depth 2 --verbose
 big promote <version> --to Candidate --message 'ready for review'
 big show <version>
 big lifecycle events <version>
+big outbox list --full
 ```
 
 期望：
@@ -213,9 +214,11 @@ big lifecycle events <version>
 - `big promote` 输出 `old_state: [Exploring/resident]`
 - `big promote` 输出 `new_state: [Candidate/resident]`
 - `retention_state` 保持 `resident`，不会回收或移动 CAS 对象
+- `big promote` 输出 `candidate_outbox: queued` 和 `outbox_event: oe...`
 - `big show <version>` 展示 `state: [Candidate/resident]`
 - `big lifecycle events <version>` 展示 `Exploring->Candidate` 和原因
-- 当前原型只记录状态迁移事件；`candidate_outbox: not-implemented` 表示还没有触发 Growth 阶段的 Candidate 交付 outbox。
+- `big outbox list --full` 展示 `artifact.candidate_marked` pending 事件，payload 中包含 version、manifest 和 recipe 信息
+- 当前原型只把 Candidate 交付事件可靠写入本地 outbox；还没有实现 outbox worker、delivery staging 或版本化发布目录。
 
 晋升到 `Golden` 需要显式确认：
 

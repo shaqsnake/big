@@ -1379,6 +1379,11 @@ def audit() -> None:
     """Audit hash-chain commands."""
 
 
+@main.group()
+def outbox() -> None:
+    """Transactional outbox commands."""
+
+
 @repo.command("init")
 @click.argument("path", type=click.Path(path_type=Path))
 @click.option("--repo-id", required=True, help="Logical BIG repository id.")
@@ -2461,7 +2466,7 @@ def promote_cmd(version: str, target_state: str, message: str, confirm: str) -> 
         raise click.ClickException("Promoting to Golden requires --confirm GOLDEN")
 
     try:
-        metadata.update_review_state(
+        outbox_event_id = metadata.update_review_state(
             version_id=record.id,
             expected_old_review_state=record.review_state,
             new_review_state=target_state,
@@ -2478,7 +2483,8 @@ def promote_cmd(version: str, target_state: str, message: str, confirm: str) -> 
     click.echo("promote: moved")
     click.echo("retention: unchanged")
     if target_state == "Candidate":
-        click.echo("candidate_outbox: not-implemented")
+        click.echo("candidate_outbox: queued")
+        click.echo(f"outbox_event: {outbox_event_id}")
 
 
 @lifecycle.command("degrade")
@@ -2635,6 +2641,34 @@ def audit_verify_cmd(show_full: bool) -> None:
 
     if issues:
         raise click.ClickException("Audit hash-chain verification failed")
+
+
+@outbox.command("list")
+@click.option("--all", "include_published", is_flag=True, help="Show all events.")
+@click.option("--limit", default=20, show_default=True, type=click.IntRange(min=1))
+@click.option("--full", "show_full", is_flag=True, help="Show event payload JSON.")
+def outbox_list_cmd(include_published: bool, limit: int, show_full: bool) -> None:
+    """Show pending transactional outbox events."""
+    _, metadata = _repo_from_cwd()
+    events = metadata.list_outbox_events(
+        limit=limit,
+        pending_only=not include_published,
+    )
+    if not events:
+        message = "No outbox events." if include_published else "No pending outbox events."
+        click.echo(message)
+        return
+
+    for item in events:
+        status = (
+            "pending" if not item.published_at else f"published={item.published_at}"
+        )
+        click.echo(
+            f"{item.id} {item.event_type} {item.aggregate_type} "
+            f"{item.aggregate_id} {item.created_at} {status}"
+        )
+        if show_full:
+            click.echo(f"  payload: {item.payload_json}")
 
 
 @branch.command("create")

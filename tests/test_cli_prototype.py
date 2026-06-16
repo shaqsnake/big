@@ -419,11 +419,24 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "new_state: [Candidate/resident]" in promote.output
         assert "promote: moved" in promote.output
         assert "retention: unchanged" in promote.output
-        assert "candidate_outbox: not-implemented" in promote.output
+        assert "candidate_outbox: queued" in promote.output
+        outbox_event = re.search(r"outbox_event: (oe[0-9a-f]+)", promote.output)
+        assert outbox_event
 
         promoted_show = runner.invoke(main, ["show", second_version.group(1)])
         assert promoted_show.exit_code == 0, promoted_show.output
         assert "state: [Candidate/resident]" in promoted_show.output
+
+        outbox_list = runner.invoke(main, ["outbox", "list", "--full"])
+        assert outbox_list.exit_code == 0, outbox_list.output
+        assert outbox_event.group(1) in outbox_list.output
+        assert (
+            f"artifact.candidate_marked version {second_version.group(1)}"
+            in outbox_list.output
+        )
+        assert "pending" in outbox_list.output
+        assert f'"version_id":"{second_version.group(1)}"' in outbox_list.output
+        assert '"manifest_hash"' in outbox_list.output
 
         lifecycle_events = runner.invoke(
             main,
@@ -443,6 +456,9 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         )
         assert noop_promote.exit_code == 0, noop_promote.output
         assert "promote: no-op" in noop_promote.output
+        outbox_after_noop = runner.invoke(main, ["outbox", "list"])
+        assert outbox_after_noop.exit_code == 0, outbox_after_noop.output
+        assert outbox_after_noop.output.count("artifact.candidate_marked") == 1
 
         demote = runner.invoke(
             main,

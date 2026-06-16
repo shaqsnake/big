@@ -238,7 +238,14 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     )
     _expect_contains(alice_promote, "old_state: [Exploring/resident]")
     _expect_contains(alice_promote, "new_state: [Candidate/resident]")
-    _expect_contains(alice_promote, "candidate_outbox: not-implemented")
+    _expect_contains(alice_promote, "candidate_outbox: queued")
+    _expect_contains(alice_promote, "outbox_event: oe")
+
+    outbox_list = _run_big(["outbox", "list", "--full"], alice_workspace, env)
+    _expect_contains(outbox_list, "artifact.candidate_marked")
+    _expect_contains(outbox_list, f"version {alice_version}")
+    _expect_contains(outbox_list, "pending")
+    _expect_contains(outbox_list, f'"version_id":"{alice_version}"')
 
     lifecycle_events = _run_big(
         ["lifecycle", "events", alice_version],

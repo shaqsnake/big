@@ -118,6 +118,17 @@ class AuditChainIssue:
 
 
 @dataclass(frozen=True)
+class OutboxEvent:
+    id: str
+    event_type: str
+    aggregate_type: str
+    aggregate_id: str
+    payload_json: str
+    created_at: str
+    published_at: str
+
+
+@dataclass(frozen=True)
 class RetentionStorageSummary:
     retention_state: str
     versions: int
@@ -267,6 +278,16 @@ class SQLiteMetadataRepository(MetadataRepository):
                     event_hash TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS outbox_event (
+                    id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    aggregate_type TEXT NOT NULL,
+                    aggregate_id TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    published_at TEXT NOT NULL DEFAULT ''
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_versions_branch_created
                     ON versions(branch, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_file_refs_hash
@@ -281,6 +302,8 @@ class SQLiteMetadataRepository(MetadataRepository):
                     ON lifecycle_events(version_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_audit_events_created
                     ON audit_events(created_at DESC, id DESC);
+                CREATE INDEX IF NOT EXISTS idx_outbox_event_unpublished
+                    ON outbox_event(published_at, created_at);
                 """
             )
             _ensure_column(conn, "branches", "kind", "TEXT NOT NULL DEFAULT 'named'")
@@ -613,11 +636,12 @@ class SQLiteMetadataRepository(MetadataRepository):
         actor: str,
         created_at: str,
         reason: str,
-    ) -> None:
+    ) -> str:
+        outbox_event_id = ""
         with self.connect() as conn:
             row = conn.execute(
                 """
-                SELECT review_state, retention_state
+                SELECT *
                 FROM versions
                 WHERE id = ?
                 """,
@@ -658,6 +682,24 @@ class SQLiteMetadataRepository(MetadataRepository):
                     reason,
                 ),
             )
+            if new_review_state == "Candidate":
+                outbox_event_id = _append_outbox_event(
+                    conn,
+                    event_type="artifact.candidate_marked",
+                    aggregate_type="version",
+                    aggregate_id=version_id,
+                    created_at=created_at,
+                    payload={
+                        "version_id": version_id,
+                        "branch": row["branch"],
+                        "manifest_hash": row["manifest_hash"],
+                        "recipe_hash": row["recipe_hash"],
+                        "old_review_state": old_review_state,
+                        "new_review_state": new_review_state,
+                        "retention_state": old_retention_state,
+                        "reason": reason,
+                    },
+                )
             _append_audit_event(
                 conn,
                 action="promote",
@@ -672,8 +714,10 @@ class SQLiteMetadataRepository(MetadataRepository):
                     "old_retention_state": old_retention_state,
                     "new_retention_state": old_retention_state,
                     "reason": reason,
+                    "outbox_event_id": outbox_event_id,
                 },
             )
+        return outbox_event_id
 
     def update_retention_state(
         self,
@@ -772,6 +816,33 @@ class SQLiteMetadataRepository(MetadataRepository):
                 (limit,),
             ).fetchall()
         return [_audit_event_from_row(row) for row in rows]
+
+    def list_outbox_events(
+        self,
+        limit: int = 20,
+        pending_only: bool = True,
+    ) -> list[OutboxEvent]:
+        with self.connect() as conn:
+            if pending_only:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM outbox_event
+                    WHERE published_at = ''
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM outbox_event
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        return [_outbox_event_from_row(row) for row in rows]
 
     def verify_audit_chain(self) -> tuple[int, list[AuditChainIssue]]:
         with self.connect() as conn:
@@ -1236,6 +1307,66 @@ def _audit_event_from_row(row: sqlite3.Row) -> AuditEvent:
         previous_hash=row["previous_hash"],
         event_hash=row["event_hash"],
     )
+
+
+def _outbox_event_from_row(row: sqlite3.Row) -> OutboxEvent:
+    return OutboxEvent(
+        id=row["id"],
+        event_type=row["event_type"],
+        aggregate_type=row["aggregate_type"],
+        aggregate_id=row["aggregate_id"],
+        payload_json=row["payload_json"],
+        created_at=row["created_at"],
+        published_at=row["published_at"],
+    )
+
+
+def _append_outbox_event(
+    conn: sqlite3.Connection,
+    event_type: str,
+    aggregate_type: str,
+    aggregate_id: str,
+    created_at: str,
+    payload: dict[str, object],
+) -> str:
+    payload_json = _canonical_json(payload)
+    event_id = _outbox_event_id(
+        event_type=event_type,
+        aggregate_type=aggregate_type,
+        aggregate_id=aggregate_id,
+        created_at=created_at,
+        payload_json=payload_json,
+    )
+    conn.execute(
+        """
+        INSERT INTO outbox_event(
+            id, event_type, aggregate_type, aggregate_id, payload_json,
+            created_at, published_at
+        ) VALUES (?, ?, ?, ?, ?, ?, '')
+        """,
+        (
+            event_id,
+            event_type,
+            aggregate_type,
+            aggregate_id,
+            payload_json,
+            created_at,
+        ),
+    )
+    return event_id
+
+
+def _outbox_event_id(
+    event_type: str,
+    aggregate_type: str,
+    aggregate_id: str,
+    created_at: str,
+    payload_json: str,
+) -> str:
+    data = "|".join(
+        (event_type, aggregate_type, aggregate_id, created_at, payload_json)
+    ).encode("utf-8")
+    return "oe" + hashlib.sha256(data).hexdigest()[:12]
 
 
 def _append_audit_event(
