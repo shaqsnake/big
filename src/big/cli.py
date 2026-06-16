@@ -3021,6 +3021,74 @@ def lineage_cmd(
             click.echo(f"    message: {item.message}")
 
 
+@main.command("impact")
+@click.argument("version")
+@click.option("--depth", default=1, show_default=True, type=click.IntRange(min=1))
+@click.option("--verbose", is_flag=True, help="Show edge evidence summary.")
+@click.option("--full", "show_full", is_flag=True, help="Show all visited details.")
+def impact_cmd(version: str, depth: int, verbose: bool, show_full: bool) -> None:
+    """Show downstream versions that consume a version."""
+    _, metadata = _repo_from_cwd()
+    record = metadata.get_version(version)
+    if record is None:
+        raise click.ClickException(f"Version not found or ambiguous: {version}")
+    _require_version_permission(metadata, record, "read")
+
+    click.echo(f"version: {record.id}")
+    click.echo(f"depth_limit: {depth}")
+
+    visible = 0
+    restricted = 0
+    queue: list[tuple[int, VersionRecord]] = [(0, record)]
+    expanded: set[str] = set()
+    emitted: set[tuple[str, str]] = set()
+
+    while queue:
+        current_depth, upstream = queue.pop(0)
+        if current_depth >= depth or upstream.id in expanded:
+            continue
+        expanded.add(upstream.id)
+        for edge in metadata.list_downstream_edges(upstream.id):
+            edge_depth = current_depth + 1
+            downstream = metadata.get_version(edge.downstream_version_id)
+            if downstream is None:
+                restricted += 1
+                click.echo(f"  {edge_depth} missing edge_id={edge.id}")
+                continue
+            try:
+                _require_version_permission(metadata, downstream, "read")
+            except click.ClickException:
+                restricted += 1
+                click.echo(f"  {edge_depth} restricted edge_id={edge.id}")
+                continue
+
+            edge_key = (edge.upstream_version_id, edge.downstream_version_id)
+            if edge_key in emitted:
+                continue
+            emitted.add(edge_key)
+            visible += 1
+            click.echo(
+                f"  {edge_depth} {downstream.id} edge={edge.edge_type} "
+                f"upstream_branch={upstream.branch} "
+                f"downstream_branch={downstream.branch} step={downstream.step} "
+                f"state=[{downstream.review_state}/{downstream.retention_state}]"
+            )
+            if verbose or show_full:
+                evidence = _edge_evidence(edge)
+                path = str(evidence.get("path", "-"))
+                click.echo(
+                    f"    evidence_path: {path} "
+                    f"actor={edge.actor or '-'} created_at={edge.created_at or '-'}"
+                )
+            if edge_depth < depth and downstream.id not in expanded:
+                queue.append((edge_depth, downstream))
+
+    click.echo(f"visible_downstream: {visible}")
+    click.echo(f"restricted_downstream: {restricted}")
+    if visible == 0 and restricted == 0:
+        click.echo("no visible downstream impact")
+
+
 @main.command("verify")
 @click.argument("version")
 @click.option("--full", "show_full", is_flag=True, help="Show every failed FileRef.")

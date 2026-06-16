@@ -1093,6 +1093,18 @@ class SQLiteMetadataRepository(MetadataRepository):
             ).fetchall()
         return [_provenance_edge_from_row(row) for row in rows]
 
+    def list_downstream_edges(self, version_id: str) -> list[ProvenanceEdge]:
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM provenance_edges
+                WHERE upstream_version_id = ?
+                ORDER BY edge_type, downstream_version_id, id
+                """,
+                (version_id,),
+            ).fetchall()
+        return [_provenance_edge_from_row(row) for row in rows]
+
     def list_all_file_refs(self) -> list[tuple[str, FileRef]]:
         with self.connect() as conn:
             rows = conn.execute(

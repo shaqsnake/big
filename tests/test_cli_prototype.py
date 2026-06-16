@@ -739,6 +739,115 @@ def test_commit_can_record_cross_branch_consumes_lineage(tmp_path: Path) -> None
         os.chdir(old_cwd)
 
 
+def test_impact_lists_direct_and_recursive_consumes(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    alice_workspace = repo_root / "user" / "alice" / "APR"
+    bob_workspace = repo_root / "user" / "bob" / "STA"
+    carol_workspace = repo_root / "user" / "carol" / "PV"
+    _write(alice_workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(alice_workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    _write(bob_workspace / "inputs" / "constraints.sdc", "create_clock clk\n")
+    _write(bob_workspace / "outputs" / "timing.rpt", "wns 0.01\n")
+    _write(carol_workspace / "inputs" / "deck.runset", "layout_check\n")
+    _write(carol_workspace / "outputs" / "pv.log", "clean\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(alice_workspace)
+        upstream_commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+            ],
+        )
+        assert upstream_commit.exit_code == 0, upstream_commit.output
+        upstream_version = re.search(r"version: (v[0-9a-f]+)", upstream_commit.output)
+        assert upstream_version
+
+        os.chdir(bob_workspace)
+        bob_commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "sta",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--cross-branch-input",
+                f"{upstream_version.group(1)}:outputs/top.def",
+            ],
+        )
+        assert bob_commit.exit_code == 0, bob_commit.output
+        bob_version = re.search(r"version: (v[0-9a-f]+)", bob_commit.output)
+        assert bob_version
+
+        os.chdir(carol_workspace)
+        carol_commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "pv",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--cross-branch-input",
+                f"{bob_version.group(1)}:outputs/timing.rpt",
+            ],
+        )
+        assert carol_commit.exit_code == 0, carol_commit.output
+        carol_version = re.search(r"version: (v[0-9a-f]+)", carol_commit.output)
+        assert carol_version
+
+        direct = runner.invoke(main, ["impact", upstream_version.group(1)])
+        assert direct.exit_code == 0, direct.output
+        assert f"version: {upstream_version.group(1)}" in direct.output
+        assert "depth_limit: 1" in direct.output
+        assert f"1 {bob_version.group(1)} edge=consumes" in direct.output
+        assert f"upstream_branch=workspace/default/alice/APR" in direct.output
+        assert f"downstream_branch=workspace/default/bob/STA" in direct.output
+        assert carol_version.group(1) not in direct.output
+        assert "visible_downstream: 1" in direct.output
+        assert "restricted_downstream: 0" in direct.output
+
+        recursive = runner.invoke(
+            main,
+            ["impact", upstream_version.group(1), "--depth", "2", "--verbose"],
+        )
+        assert recursive.exit_code == 0, recursive.output
+        assert f"1 {bob_version.group(1)} edge=consumes" in recursive.output
+        assert f"2 {carol_version.group(1)} edge=consumes" in recursive.output
+        assert "evidence_path: outputs/top.def" in recursive.output
+        assert "evidence_path: outputs/timing.rpt" in recursive.output
+        assert "visible_downstream: 2" in recursive.output
+
+        no_impact = runner.invoke(main, ["impact", carol_version.group(1)])
+        assert no_impact.exit_code == 0, no_impact.output
+        assert "visible_downstream: 0" in no_impact.output
+        assert "restricted_downstream: 0" in no_impact.output
+        assert "no visible downstream impact" in no_impact.output
+
+        audit_verify = runner.invoke(main, ["audit", "verify"])
+        assert audit_verify.exit_code == 0, audit_verify.output
+        assert "events: 3" in audit_verify.output
+        assert "integrity: ok" in audit_verify.output
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_checkout_include_exclude_materializes_file_subset(tmp_path: Path) -> None:
     runner = CliRunner()
     repo_root = tmp_path / "data" / "DemoChip"

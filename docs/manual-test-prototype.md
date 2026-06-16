@@ -186,6 +186,8 @@ big commit \
   --cross-branch-input vabc123:outputs/top.def \
   --message 'consume apr def'
 big lineage <new-version>
+big impact vabc123
+big impact vabc123 --depth 2 --verbose
 ```
 
 期望：
@@ -193,7 +195,8 @@ big lineage <new-version>
 - commit 输出 `cross_branch_inputs: 1`
 - `lineage` 中当前版本的 parent 仍然来自当前 workspace-private ref
 - `lineage` 在该节点下额外输出 `consumes:`，并列出上游 version、`edge=consumes`、上游 branch、step 和 evidence path
-- 该能力只记录显式声明的 consumes 边，不自动扫描 EDA 文件内容，也不做下游影响分析。
+- `impact` 输出直接依赖该上游 version 的下游 version；`--depth 2` 会继续沿 consumes 边递归展开第二层
+- 该能力只记录显式声明的 consumes 边，不自动扫描 EDA 文件内容。
 
 ### 用例 3：手动晋升生命周期评审状态
 
@@ -674,6 +677,7 @@ pwd
 - `big log`
 - `big lineage`
 - `big lineage --changes`
+- `big impact`
 - `big show`
 - `big verify`
 - `big diff`
