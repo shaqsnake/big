@@ -3472,7 +3472,15 @@ def show_cmd(version: str, verbose: bool, show_full: bool) -> None:
 
 @main.command("lineage")
 @click.argument("version")
-@click.option("--limit", default=20, show_default=True, type=click.IntRange(min=1))
+@click.option(
+    "--limit",
+    "--depth",
+    "limit",
+    default=20,
+    show_default=True,
+    type=click.IntRange(min=1),
+    help="Maximum parent-chain nodes to show.",
+)
 @click.option("--changes", is_flag=True, help="Show recipe/input changes per node.")
 @click.option("--verbose", is_flag=True, help="Show more change details.")
 @click.option("--full", "show_full", is_flag=True, help="Show all changed inputs.")

@@ -181,6 +181,7 @@ big repo stats
 big status
 big log
 big lineage <version>
+big lineage <version> --depth 1
 big lineage <version> --changes
 big show <version> --full
 big verify <version>

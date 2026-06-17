@@ -462,6 +462,15 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "truncated: yes" in limited_lineage.output
         assert f"1 {first_version.group(1)} parent=-" not in limited_lineage.output
 
+        depth_limited_lineage = runner.invoke(
+            main,
+            ["lineage", second_version.group(1), "--depth", "1"],
+        )
+        assert depth_limited_lineage.exit_code == 0, depth_limited_lineage.output
+        assert "entries: 1" in depth_limited_lineage.output
+        assert "truncated: yes" in depth_limited_lineage.output
+        assert f"1 {first_version.group(1)} parent=-" not in depth_limited_lineage.output
+
         missing_lineage = runner.invoke(main, ["lineage", "v-does-not-exist"])
         assert missing_lineage.exit_code != 0
         assert "Version not found or ambiguous" in missing_lineage.output
