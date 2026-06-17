@@ -227,6 +227,10 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     alice_version = _version_from(alice_post_restore_commit)
     _expect_contains(
         alice_post_restore_commit,
+        f"derived_from: {alice_restored_from_version}",
+    )
+    _expect_contains(
+        alice_post_restore_commit,
         f"restored_from: {alice_restored_from_version}",
     )
     _expect_contains(alice_post_restore_commit, "workspace_generation: 1")
@@ -238,8 +242,35 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
         alice_lineage,
         f"0 {alice_version} parent={alice_restored_from_version}",
     )
+    _expect_contains(alice_lineage, f"derived_from: {alice_restored_from_version}")
     _expect_contains(alice_lineage, f"restored_from: {alice_restored_from_version}")
     _expect_contains(alice_lineage, f"1 {alice_restored_from_version} parent=-")
+
+    alice_lineage_depth = _run_big(
+        ["lineage", alice_version, "--depth", "1"],
+        alice_workspace,
+        env,
+    )
+    _expect_contains(alice_lineage_depth, "entries: 1")
+    _expect_contains(alice_lineage_depth, "truncated: yes")
+
+    alice_show_full = _run_big(["show", alice_version, "--full"], alice_workspace, env)
+    _expect_contains(alice_show_full, f"derived_from: {alice_restored_from_version}")
+    _expect_contains(alice_show_full, "input_summary:")
+    _expect_contains(alice_show_full, "output_summary:")
+    _expect_contains(alice_show_full, "capture_evidence: available=")
+
+    alice_diff = _run_big(
+        ["diff", alice_modified_version, alice_version, "--verbose"],
+        alice_workspace,
+        env,
+    )
+    _expect_contains(alice_diff, "recipe_hash: changed")
+    _expect_contains(alice_diff, "manifest_hash: changed")
+    _expect_contains(alice_diff, "review_state: unchanged")
+    _expect_contains(alice_diff, "retention_state: unchanged")
+    _expect_contains(alice_diff, "input_changes: added=0 removed=0 modified=1")
+    _expect_contains(alice_diff, "output_changes: added=0 removed=0 modified=1")
 
     alice_promote = _run_big(
         [
