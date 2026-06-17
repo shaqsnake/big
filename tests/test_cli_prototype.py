@@ -1921,6 +1921,7 @@ def test_restore_in_place_rewrites_clean_workspace_with_journal(
 
         lineage = runner.invoke(main, ["lineage", post_restore_version.group(1)])
         assert lineage.exit_code == 0, lineage.output
+        assert f"derived_from: {first_version.group(1)}" in lineage.output
         assert f"restored_from: {first_version.group(1)}" in lineage.output
         assert f"restore_journal: {journal.group(1)}" in lineage.output
 

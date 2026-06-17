@@ -422,6 +422,7 @@ big lineage <new-version>
 - `big commit` 输出 `restore_journal: r...`
 - `big commit` 输出 `workspace_generation: ...`
 - `big show`、`big log --verbose` 和 `big lineage` 都可以看到该 version 的 restore provenance
+- `big lineage` 额外显示 `derived_from: <old-version>`，表达该版本来自一次显式 restore 后继续生成
 - `big status` 和 `big branch show <branch>` 对当前 head 也会显示 `head_restored_from` 与 `head_restore_journal`
 
 ### 用例 8：验证两个工程师目录互相隔离

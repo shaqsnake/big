@@ -3544,6 +3544,7 @@ def lineage_cmd(
         if item.workspace_id:
             click.echo(f"    workspace: {item.workspace_id}")
         if item.restored_from_version_id:
+            click.echo(f"    derived_from: {item.restored_from_version_id}")
             click.echo(f"    restored_from: {item.restored_from_version_id}")
             click.echo(f"    restore_journal: {item.restore_journal_id}")
             click.echo(f"    workspace_generation: {item.workspace_generation}")
