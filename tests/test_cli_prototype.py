@@ -2023,6 +2023,79 @@ def test_commit_require_marker_checks_configured_success_marker(
         os.chdir(old_cwd)
 
 
+def test_commit_settle_window_rejects_changed_files(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+    config_path = repo_root / "big.toml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + "\n[capture]\nsettle_ms = 25\n",
+        encoding="utf-8",
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+
+        def mutate_during_settle(_seconds: float) -> None:
+            _write(
+                workspace / "inputs" / "top.v",
+                "module top; wire changed; endmodule\n",
+            )
+
+        monkeypatch.setattr(cli_module.time, "sleep", mutate_during_settle)
+        changed = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+            ],
+        )
+        assert changed.exit_code != 0
+        assert "Files changed during settle window (25 ms)" in changed.output
+        assert "inputs/top.v" in changed.output
+        assert "size" in changed.output
+
+        monkeypatch.setattr(cli_module.time, "sleep", lambda _seconds: None)
+        stable = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--settle-ms",
+                "1",
+            ],
+        )
+        assert stable.exit_code == 0, stable.output
+        assert "settle_ms: 1" in stable.output
+        assert "capture_mode: best_effort" in stable.output
+
+        log = runner.invoke(main, ["log"])
+        assert log.exit_code == 0, log.output
+        assert len(re.findall(r"^v[0-9a-f]+ ", log.output, re.MULTILINE)) == 1
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_shell_init_outputs_checkout_wrapper() -> None:
     runner = CliRunner()
     for shell in ("bash", "zsh"):

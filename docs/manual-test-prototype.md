@@ -73,6 +73,9 @@ big repo init manual-lab/data/WslChip --repo-id WslChip
 cat >> manual-lab/data/WslChip/big.toml <<'EOF'
 [step_markers]
 success = "../markers/{flow}/{step}.done"
+
+[capture]
+settle_ms = 1
 EOF
 ```
 
@@ -134,8 +137,21 @@ big commit --step place \
 - 输出 `version: v...`
 - 输出 `branch: workspace/default/alice/APR`
 - 输出 `inputs: 3` 和 `outputs: 2`
+- 输出 `settle_ms: 1`，表示提交前已检查候选文件在 1ms 窗口内保持稳定
 - 输出 `success_marker: found` 和解析后的 `success_marker_path`
 - `manual-lab/data/WslChip/.big/cas/objects/` 下出现 CAS 对象
+
+也可以临时覆盖项目配置，例如：
+
+```bash
+big commit --step place \
+  --inputs 'inputs/**;scripts/**' \
+  --outputs 'outputs/**;reports/**' \
+  --message 'settle override demo' \
+  --settle-ms 10
+```
+
+如果窗口内目标文件发生变化，命令会拒绝 commit，并输出 `Files changed during settle window` 以及变化文件。
 
 检查 CAS 对象是否仍有写权限：
 

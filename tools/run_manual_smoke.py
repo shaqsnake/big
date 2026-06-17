@@ -79,15 +79,16 @@ def _expect_contains(output: str, expected: str) -> None:
         raise SystemExit(f"Expected smoke output to contain: {expected}")
 
 
-def _enable_success_marker(root: Path) -> None:
+def _enable_capture_controls(root: Path) -> None:
     config_path = root / "big.toml"
     text = config_path.read_text(encoding="utf-8")
-    if "[step_markers]" in text:
-        return
-    config_path.write_text(
-        text + '\n[step_markers]\nsuccess = "../markers/{flow}/{step}.done"\n',
-        encoding="utf-8",
-    )
+    additions: list[str] = []
+    if "[step_markers]" not in text:
+        additions.append('[step_markers]\nsuccess = "../markers/{flow}/{step}.done"\n')
+    if "[capture]" not in text:
+        additions.append("[capture]\nsettle_ms = 1\n")
+    if additions:
+        config_path.write_text(text + "\n" + "\n".join(additions), encoding="utf-8")
 
 
 def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
@@ -109,7 +110,7 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     shaq_workspace = root / "user" / "shaqsnake" / "APR"
 
     _run_big(["repo", "init", str(root), "--repo-id", repo_id], project_root, env)
-    _enable_success_marker(root)
+    _enable_capture_controls(root)
 
     alice_status = _run_big(["status"], alice_workspace, env)
     _expect_contains(alice_status, "default_ref: workspace/default/alice/APR")
@@ -147,6 +148,7 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     )
     alice_version = _version_from(alice_commit)
     _expect_contains(alice_commit, "branch: workspace/default/alice/APR")
+    _expect_contains(alice_commit, "settle_ms: 1")
     _expect_contains(alice_commit, "success_marker: found")
     _expect_contains(alice_commit, "markers")
     alice_restored_from_version = alice_version

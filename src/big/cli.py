@@ -14,6 +14,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import time
 import uuid
 
 import click
@@ -547,6 +548,78 @@ def _resolve_patterns(patterns: tuple[str, ...], workspace: Path, label: str) ->
             f"{label} files must be under the current workspace: {outside[0]}"
         )
     return unique
+
+
+def _stability_signature(path: Path) -> tuple[int, int, int, int]:
+    stat_result = path.stat()
+    return (
+        stat_result.st_size,
+        stat_result.st_mtime_ns,
+        getattr(stat_result, "st_ctime_ns", 0),
+        getattr(stat_result, "st_ino", 0),
+    )
+
+
+def _workspace_display_path(path: Path, workspace: Path) -> str:
+    try:
+        return path.relative_to(workspace).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _signature_delta(
+    before: tuple[int, int, int, int],
+    after: tuple[int, int, int, int],
+) -> str:
+    labels = ("size", "mtime", "ctime", "inode")
+    changed = [
+        label
+        for label, before_value, after_value in zip(labels, before, after)
+        if before_value != after_value
+    ]
+    return ",".join(changed) or "unknown"
+
+
+def _wait_for_settle_window(
+    files: list[Path],
+    workspace: Path,
+    settle_ms: int,
+) -> None:
+    if settle_ms <= 0:
+        return
+
+    before: dict[Path, tuple[int, int, int, int]] = {}
+    for path in files:
+        try:
+            before[path] = _stability_signature(path)
+        except FileNotFoundError as exc:
+            display = _workspace_display_path(path, workspace)
+            raise click.ClickException(
+                f"File disappeared before settle window: {display}"
+            ) from exc
+
+    time.sleep(settle_ms / 1000)
+
+    changes: list[str] = []
+    for path, before_signature in before.items():
+        try:
+            after_signature = _stability_signature(path)
+        except FileNotFoundError:
+            changes.append(f"{_workspace_display_path(path, workspace)}: missing")
+            continue
+        if after_signature != before_signature:
+            changes.append(
+                f"{_workspace_display_path(path, workspace)}: "
+                f"{_signature_delta(before_signature, after_signature)}"
+            )
+
+    if changes:
+        summary = "; ".join(changes[:5])
+        if len(changes) > 5:
+            summary += f"; ... {len(changes) - 5} more"
+        raise click.ClickException(
+            f"Files changed during settle window ({settle_ms} ms): {summary}"
+        )
 
 
 def _capture_files(
@@ -2963,6 +3036,12 @@ def branch_show_cmd(branch_name: str) -> None:
     is_flag=True,
     help="Require the configured step success marker before capturing files.",
 )
+@click.option(
+    "--settle-ms",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Override [capture].settle_ms for this commit.",
+)
 @click.option("--verbose", is_flag=True, help="Show manifest summary details.")
 def commit_cmd(
     step: str,
@@ -2972,6 +3051,7 @@ def commit_cmd(
     branch: str,
     cross_branch_inputs: tuple[str, ...],
     require_marker: bool,
+    settle_ms: int | None,
     verbose: bool,
 ) -> None:
     """Capture inputs/outputs into CAS and create a version manifest."""
@@ -3012,6 +3092,14 @@ def commit_cmd(
             )
     inputs = _resolve_patterns(input_patterns, workspace, "input")
     outputs = _resolve_patterns(output_patterns, workspace, "output")
+    effective_settle_ms = (
+        config.capture_settle_ms if settle_ms is None else settle_ms
+    )
+    _wait_for_settle_window(
+        inputs + outputs,
+        workspace,
+        effective_settle_ms,
+    )
 
     capture_id = uuid.uuid4().hex
     staging_root = config.staging_dir / capture_id
@@ -3039,6 +3127,7 @@ def commit_cmd(
             "workspace_id": workspace_context.workspace_id,
             "step": step,
             "success_marker": str(success_marker_path) if success_marker_path else "",
+            "settle_ms": effective_settle_ms,
             "provenance_edges": [
                 {
                     "edge_type": edge.edge_type,
@@ -3088,6 +3177,8 @@ def commit_cmd(
     if provenance_edges:
         click.echo(f"cross_branch_inputs: {len(provenance_edges)}")
     click.echo(f"capture_mode: {record.capture_mode}")
+    if effective_settle_ms:
+        click.echo(f"settle_ms: {effective_settle_ms}")
     if success_marker_path:
         click.echo("success_marker: found")
         click.echo(f"success_marker_path: {success_marker_path}")

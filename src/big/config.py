@@ -32,6 +32,7 @@ class RepoConfig:
     acl_templates: tuple[AclTemplate, ...] = ()
     acl_validate_groups: bool = False
     step_success_marker: str = ""
+    capture_settle_ms: int = 0
 
     @property
     def big_dir(self) -> Path:
@@ -173,6 +174,18 @@ def _load_step_success_marker(data: dict[str, object]) -> str:
     return str(raw_markers.get("success", "")).strip()
 
 
+def _load_capture_settle_ms(data: dict[str, object]) -> int:
+    raw_capture = data.get("capture", {})
+    if raw_capture is None:
+        return 0
+    if not isinstance(raw_capture, dict):
+        raise ValueError("capture must be declared with [capture]")
+    value = raw_capture.get("settle_ms", 0)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError("capture.settle_ms must be a non-negative integer")
+    return value
+
+
 def load_config(config_path: Path) -> RepoConfig:
     data = tomllib.loads(config_path.read_text(encoding="utf-8"))
     repo = data["repo"]
@@ -209,6 +222,7 @@ def load_config(config_path: Path) -> RepoConfig:
         acl_templates=_load_acl_templates(data),
         acl_validate_groups=_load_acl_validate_groups(data),
         step_success_marker=_load_step_success_marker(data),
+        capture_settle_ms=_load_capture_settle_ms(data),
     )
 
 
