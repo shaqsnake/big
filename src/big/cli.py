@@ -6,6 +6,7 @@ import fnmatch
 import getpass
 import glob
 import hashlib
+import inspect
 import json
 import os
 from pathlib import Path
@@ -59,6 +60,88 @@ REVIEW_STATES = ("Exploring", "Candidate", "Pinned", "Golden")
 REVIEW_STATE_ORDER = {state: index for index, state in enumerate(REVIEW_STATES)}
 RETENTION_STATES = ("resident", "recipe_only", "archived", "missing")
 HIGH_IMPACT_INPUT_FORMATS = {"tcl", "sdc", "yaml", "yml", "json", "runset"}
+HELP_CONTEXT = {"help_option_names": ["-h", "--help"], "max_content_width": 100}
+
+
+MAIN_HELP_EPILOG = """
+Examples:
+
+  big repo init /data/DemoChip --repo-id DemoChip
+  cd /data/DemoChip/user/alice/APR
+  big commit --step place --inputs 'inputs/**;scripts/**' --outputs 'outputs/**;reports/**'
+  big show <version> --full
+"""
+
+
+REPO_INIT_HELP_EPILOG = """
+Examples:
+
+  big repo init /data/DemoChip --repo-id DemoChip
+
+  big repo init /data/StackChip_3D --repo-id StackChip --integration 3d \\
+    --work-root 3d=/data/StackChip_3D \\
+    --work-root top=/data/StackChip_Top \\
+    --work-root bottom=/data/StackChip_Bottom \\
+    --work-root mix=/data/StackChip_MIX
+"""
+
+
+COMMIT_HELP_EPILOG = """
+Examples:
+
+  big commit --step place --inputs 'inputs/**;scripts/**' --outputs 'outputs/**;reports/**'
+
+  big commit --step place --inputs 'inputs/**;scripts/**' --outputs 'outputs/**;reports/**' \\
+    --message 'initial place snapshot' --require-marker --settle-ms 10
+
+This prototype records files as inputs or outputs. A separate params role is future scope.
+"""
+
+
+class LiteralEpilogMixin:
+    def format_epilog(
+        self,
+        ctx: click.Context,
+        formatter: click.HelpFormatter,
+    ) -> None:
+        if not self.epilog:
+            return
+        epilog = inspect.cleandoc(self.epilog)
+        formatter.write_paragraph()
+        with formatter.indentation():
+            indent = " " * formatter.current_indent
+            for line in epilog.splitlines():
+                formatter.write(f"{indent}{line}\n" if line else "\n")
+
+
+class BigCommand(LiteralEpilogMixin, click.Command):
+    def invoke(self, ctx: click.Context) -> object:
+        try:
+            return super().invoke(ctx)
+        except click.ClickException as exc:
+            _append_help_hint(exc, ctx)
+            raise
+
+
+class BigGroup(LiteralEpilogMixin, click.Group):
+    command_class = BigCommand
+    group_class = type
+
+
+def _display_command_path(ctx: click.Context) -> str:
+    parts = ctx.command_path.split()
+    if parts:
+        parts[0] = "big"
+    return " ".join(parts) or "big"
+
+
+def _append_help_hint(exc: click.ClickException, ctx: click.Context) -> None:
+    if isinstance(exc, click.UsageError):
+        return
+    if "Next step:" in exc.message:
+        return
+    command_path = _display_command_path(ctx)
+    exc.message = f"{exc.message}\nNext step: run `{command_path} --help`."
 
 
 def _repo_from_cwd() -> tuple[object, SQLiteMetadataRepository]:
@@ -1504,7 +1587,7 @@ big() {{
 """
 
 
-@click.group(context_settings={"help_option_names": ["-h", "--help"]})
+@click.group(cls=BigGroup, context_settings=HELP_CONTEXT, epilog=MAIN_HELP_EPILOG)
 def main() -> None:
     """BIG prototype CLI for EDA artifact snapshots."""
 
@@ -1534,7 +1617,7 @@ def outbox() -> None:
     """Transactional outbox commands."""
 
 
-@repo.command("init")
+@repo.command("init", epilog=REPO_INIT_HELP_EPILOG)
 @click.argument("path", type=click.Path(path_type=Path))
 @click.option("--repo-id", required=True, help="Logical BIG repository id.")
 @click.option(
@@ -3052,7 +3135,7 @@ def branch_show_cmd(branch_name: str) -> None:
         click.echo(f"head_message: {version.message}")
 
 
-@main.command("commit")
+@main.command("commit", epilog=COMMIT_HELP_EPILOG)
 @click.option("--step", required=True, help="EDA step name, for example place.")
 @click.option(
     "--inputs",

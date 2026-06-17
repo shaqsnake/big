@@ -21,6 +21,39 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def test_core_help_outputs_examples_without_repo(tmp_path: Path) -> None:
+    runner = CliRunner()
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(tmp_path)
+        root_help = runner.invoke(main, ["--help"])
+        assert root_help.exit_code == 0, root_help.output
+        assert "BIG prototype CLI" in root_help.output
+        assert "Examples:" in root_help.output
+        assert "big repo init /data/DemoChip --repo-id DemoChip" in root_help.output
+        assert "big commit --step place" in root_help.output
+
+        init_help = runner.invoke(main, ["repo", "init", "--help"])
+        assert init_help.exit_code == 0, init_help.output
+        assert "Initialize a prototype BIG repository" in init_help.output
+        assert "--integration [2d|3d]" in init_help.output
+        assert "--work-root" in init_help.output
+        assert "--work-root top=/data/StackChip_Top" in init_help.output
+
+        commit_help = runner.invoke(main, ["commit", "--help"])
+        assert commit_help.exit_code == 0, commit_help.output
+        assert "--step" in commit_help.output
+        assert "--inputs" in commit_help.output
+        assert "--outputs" in commit_help.output
+        assert "--require-marker" in commit_help.output
+        assert "--settle-ms" in commit_help.output
+        assert "A separate params role is" in commit_help.output
+        assert "future scope." in commit_help.output
+        assert not (tmp_path / ".big").exists()
+    finally:
+        os.chdir(old_cwd)
+
+
 def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
     runner = CliRunner()
     repo_root = tmp_path / "data" / "DemoChip"
@@ -1043,6 +1076,7 @@ def test_commit_rejects_missing_inputs(tmp_path: Path) -> None:
         )
         assert result.exit_code != 0
         assert "No input files matched" in result.output
+        assert "Next step: run `big commit --help`." in result.output
     finally:
         os.chdir(old_cwd)
 
