@@ -477,6 +477,25 @@ def _resolve_cross_branch_inputs(
     return tuple(edges)
 
 
+def _derived_from_for_commit(
+    metadata: SQLiteMetadataRepository,
+    branch: str,
+    parent_id: str | None,
+    restored_from_version_id: str,
+) -> str:
+    if restored_from_version_id:
+        return restored_from_version_id
+
+    branch_record = metadata.get_branch(branch)
+    if (
+        branch_record is not None
+        and branch_record.source_version_id
+        and branch_record.source_version_id == parent_id
+    ):
+        return branch_record.source_version_id
+    return ""
+
+
 def _edge_evidence(edge: ProvenanceEdge) -> dict[str, object]:
     try:
         parsed = json.loads(edge.evidence_json or "{}")
@@ -3326,6 +3345,12 @@ def commit_cmd(
         _json_hash({"manifest": manifest_hash, "nonce": capture_id})
     )
     parent_id = metadata.get_branch_head(branch)
+    derived_from = _derived_from_for_commit(
+        metadata,
+        branch,
+        parent_id,
+        restored_from,
+    )
     record = VersionRecord(
         id=version_id,
         branch=branch,
@@ -3343,6 +3368,7 @@ def commit_cmd(
         workspace_id=workspace_context.workspace_id,
         user_name=workspace_context.user,
         flow=workspace_context.flow,
+        derived_from_version_id=derived_from,
         restored_from_version_id=restored_from,
         restore_journal_id=restore_journal_id,
         workspace_generation=workspace_generation,
@@ -3366,6 +3392,8 @@ def commit_cmd(
         click.echo("success_marker: found")
         click.echo(f"success_marker_path: {success_marker_path}")
     click.echo(f"state: [{record.review_state}/{record.retention_state}]")
+    if record.derived_from_version_id:
+        click.echo(f"derived_from: {record.derived_from_version_id}")
     if record.restored_from_version_id:
         click.echo(f"restored_from: {record.restored_from_version_id}")
         click.echo(f"restore_journal: {record.restore_journal_id}")
@@ -3407,6 +3435,8 @@ def log_cmd(branch: str | None, limit: int, verbose: bool) -> None:
         if verbose:
             click.echo(f"  parent: {item.parent_id or '-'}")
             click.echo(f"  workspace: {item.workspace_id or '-'}")
+            if item.derived_from_version_id:
+                click.echo(f"  derived_from: {item.derived_from_version_id}")
             if item.restored_from_version_id:
                 click.echo(f"  restored_from: {item.restored_from_version_id}")
                 click.echo(f"  restore_journal: {item.restore_journal_id}")
@@ -3440,6 +3470,8 @@ def show_cmd(version: str, verbose: bool, show_full: bool) -> None:
     click.echo(f"created_at: {record.created_at}")
     if record.workspace_id:
         click.echo(f"workspace: {record.workspace_id}")
+    if record.derived_from_version_id:
+        click.echo(f"derived_from: {record.derived_from_version_id}")
     if record.restored_from_version_id:
         click.echo(f"restored_from: {record.restored_from_version_id}")
         click.echo(f"restore_journal: {record.restore_journal_id}")
@@ -3543,8 +3575,9 @@ def lineage_cmd(
             click.echo(f"    manifest_hash: {_short_hash(item.manifest_hash)}")
         if item.workspace_id:
             click.echo(f"    workspace: {item.workspace_id}")
+        if item.derived_from_version_id:
+            click.echo(f"    derived_from: {item.derived_from_version_id}")
         if item.restored_from_version_id:
-            click.echo(f"    derived_from: {item.restored_from_version_id}")
             click.echo(f"    restored_from: {item.restored_from_version_id}")
             click.echo(f"    restore_journal: {item.restore_journal_id}")
             click.echo(f"    workspace_generation: {item.workspace_generation}")

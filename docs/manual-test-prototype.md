@@ -687,6 +687,7 @@ big status
 - 不带 `--plan` 时输出 `branch_created: yes` 和 `materialization: copied`
 - 新 branch `from-v1` 的 head 指向 `<version>`
 - 进入目标目录后执行 `big status`，会显示 `default_ref: from-v1`
+- 在 `from-v1` 上继续 commit 后，新 version 会记录 `derived_from: <version>`，同时 parent-chain 仍从该 source version 继续
 
 脚本或非交互流程只需要路径时，可以使用 `--print-path`：
 

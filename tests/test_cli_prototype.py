@@ -1887,12 +1887,14 @@ def test_restore_in_place_rewrites_clean_workspace_with_journal(
         )
         assert post_record is not None
         assert post_record.parent_id == first_version.group(1)
+        assert post_record.derived_from_version_id == first_version.group(1)
         assert post_record.restored_from_version_id == first_version.group(1)
         assert post_record.restore_journal_id == journal.group(1)
         assert post_record.workspace_generation == 1
 
         post_show = runner.invoke(main, ["show", post_restore_version.group(1)])
         assert post_show.exit_code == 0, post_show.output
+        assert f"derived_from: {first_version.group(1)}" in post_show.output
         assert f"restored_from: {first_version.group(1)}" in post_show.output
         assert f"restore_journal: {journal.group(1)}" in post_show.output
         assert "workspace_generation: 1" in post_show.output
@@ -1916,6 +1918,7 @@ def test_restore_in_place_rewrites_clean_workspace_with_journal(
 
         log_verbose = runner.invoke(main, ["log", "--verbose"])
         assert log_verbose.exit_code == 0, log_verbose.output
+        assert f"  derived_from: {first_version.group(1)}" in log_verbose.output
         assert f"  restored_from: {first_version.group(1)}" in log_verbose.output
         assert f"  restore_journal: {journal.group(1)}" in log_verbose.output
 
@@ -2358,6 +2361,92 @@ def test_default_workspace_histories_are_isolated_by_user_and_flow(
         shaq_status = runner.invoke(main, ["status"])
         assert shaq_status.exit_code == 0, shaq_status.output
         assert f"head: {shaq_version.group(1)}" in shaq_status.output
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_commit_records_branch_source_as_derived_from(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        base = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "base source",
+            ],
+        )
+        assert base.exit_code == 0, base.output
+        base_version = re.search(r"version: (v[0-9a-f]+)", base.output)
+        assert base_version
+
+        branch = runner.invoke(
+            main,
+            [
+                "branch",
+                "create",
+                "experiment/from-v1",
+                "--from",
+                base_version.group(1),
+            ],
+        )
+        assert branch.exit_code == 0, branch.output
+
+        _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\nCOMPONENTS 1 ;\n")
+        derived = runner.invoke(
+            main,
+            [
+                "commit",
+                "--branch",
+                "experiment/from-v1",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "branch derived snapshot",
+            ],
+        )
+        assert derived.exit_code == 0, derived.output
+        derived_version = re.search(r"version: (v[0-9a-f]+)", derived.output)
+        assert derived_version
+        assert f"derived_from: {base_version.group(1)}" in derived.output
+
+        config, _ = find_config(workspace)
+        record = SQLiteMetadataRepository(config.metadata_db).get_version(
+            derived_version.group(1)
+        )
+        assert record is not None
+        assert record.parent_id == base_version.group(1)
+        assert record.derived_from_version_id == base_version.group(1)
+        assert record.restored_from_version_id == ""
+
+        show = runner.invoke(main, ["show", derived_version.group(1)])
+        assert show.exit_code == 0, show.output
+        assert f"derived_from: {base_version.group(1)}" in show.output
+
+        lineage = runner.invoke(main, ["lineage", derived_version.group(1)])
+        assert lineage.exit_code == 0, lineage.output
+        assert f"derived_from: {base_version.group(1)}" in lineage.output
+        assert "restored_from:" not in lineage.output
     finally:
         os.chdir(old_cwd)
 
