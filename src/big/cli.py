@@ -3708,18 +3708,42 @@ def diff_cmd(old_version: str, new_version: str, verbose: bool, show_full: bool)
     )
 
     recipe_status = "unchanged" if old.recipe_hash == new.recipe_hash else "changed"
+    manifest_status = "unchanged" if old.manifest_hash == new.manifest_hash else "changed"
     click.echo(f"--- {old.id} {old.branch}")
     click.echo(f"+++ {new.id} {new.branch}")
     click.echo(f"recipe_hash: {recipe_status}")
+    click.echo(f"manifest_hash: {manifest_status}")
+    click.echo(
+        f"review_state: {_diff_value(old.review_state, new.review_state)}"
+    )
+    click.echo(
+        "retention_state: "
+        f"{_diff_value(old.retention_state, new.retention_state)}"
+    )
     click.echo(f"added: {len(added)}")
     click.echo(f"removed: {len(removed)}")
     click.echo(f"modified: {len(modified)}")
+    for role in ("input", "output"):
+        click.echo(
+            f"{role}_changes: "
+            f"added={_role_count(added, role)} "
+            f"removed={_role_count(removed, role)} "
+            f"modified={_role_count(modified, role)}"
+        )
 
     if verbose or show_full:
         limit = None if show_full else 20
         _print_diff_entries("+", added, new_refs, limit)
         _print_diff_entries("-", removed, old_refs, limit)
         _print_modified_entries(modified, old_refs, new_refs, limit)
+
+
+def _diff_value(old: str, new: str) -> str:
+    return "unchanged" if old == new else f"{old}->{new}"
+
+
+def _role_count(keys: list[tuple[str, str]], role: str) -> int:
+    return sum(1 for item_role, _ in keys if item_role == role)
 
 
 def _print_diff_entries(

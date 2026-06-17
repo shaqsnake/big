@@ -301,6 +301,9 @@ big diff <old-version> <new-version> --verbose
 期望：
 
 - `recipe_hash: changed`
+- `manifest_hash: changed` 或 `unchanged`
+- `review_state` 与 `retention_state` 单独显示为 `unchanged` 或 `old->new`
+- `input_changes` 和 `output_changes` 分别显示 added/removed/modified 数量
 - diff 中出现 `~ input inputs/top.v`
 - diff 中出现 `~ output outputs/top_placed.def`
 

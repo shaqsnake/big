@@ -421,6 +421,11 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         )
         assert diff.exit_code == 0, diff.output
         assert "recipe_hash: changed" in diff.output
+        assert "manifest_hash: changed" in diff.output
+        assert "review_state: unchanged" in diff.output
+        assert "retention_state: unchanged" in diff.output
+        assert "input_changes: added=0 removed=0 modified=2" in diff.output
+        assert "output_changes: added=0 removed=0 modified=1" in diff.output
         assert "~ input inputs/top.v" in diff.output
         assert "~ output outputs/top.def" in diff.output
 
@@ -1089,6 +1094,79 @@ def test_commit_rejects_missing_inputs(tmp_path: Path) -> None:
         assert result.exit_code != 0
         assert "No input files matched" in result.output
         assert "Next step: run `big commit --help`." in result.output
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_diff_separates_state_changes_from_manifest_changes(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        first = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "state diff base",
+            ],
+        )
+        assert first.exit_code == 0, first.output
+        first_version = re.search(r"version: (v[0-9a-f]+)", first.output)
+        assert first_version
+
+        second = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "same manifest candidate",
+            ],
+        )
+        assert second.exit_code == 0, second.output
+        second_version = re.search(r"version: (v[0-9a-f]+)", second.output)
+        assert second_version
+
+        promote = runner.invoke(
+            main,
+            ["promote", second_version.group(1), "--to", "Candidate"],
+        )
+        assert promote.exit_code == 0, promote.output
+
+        diff = runner.invoke(
+            main,
+            ["diff", first_version.group(1), second_version.group(1)],
+        )
+        assert diff.exit_code == 0, diff.output
+        assert "recipe_hash: unchanged" in diff.output
+        assert "manifest_hash: unchanged" in diff.output
+        assert "review_state: Exploring->Candidate" in diff.output
+        assert "retention_state: unchanged" in diff.output
+        assert "added: 0" in diff.output
+        assert "removed: 0" in diff.output
+        assert "modified: 0" in diff.output
+        assert "input_changes: added=0 removed=0 modified=0" in diff.output
+        assert "output_changes: added=0 removed=0 modified=0" in diff.output
     finally:
         os.chdir(old_cwd)
 
