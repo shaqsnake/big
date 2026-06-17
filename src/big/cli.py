@@ -25,6 +25,7 @@ except ImportError:  # pragma: no cover - Windows fallback
     grp = None
 
 from .cas import (
+    CapturedFile,
     object_path,
     publish_object,
     sha256_file,
@@ -622,6 +623,53 @@ def _wait_for_settle_window(
         )
 
 
+def _capture_evidence_json(captured: CapturedFile) -> str:
+    payload = {
+        "schema": 1,
+        "hash_algorithm": "sha256",
+        "copy_method": "shutil.copy2",
+        "stable_checks": ["size", "mtime_ns"],
+        "source_before": asdict(captured.source_before),
+        "source_after": asdict(captured.source_after),
+        "staging_hash": captured.cas_hash,
+    }
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def _capture_evidence_summary(ref: FileRef) -> str:
+    try:
+        payload = json.loads(ref.capture_evidence_json or "{}")
+    except json.JSONDecodeError:
+        return "capture_evidence: unreadable"
+    if not isinstance(payload, dict) or not payload:
+        return "capture_evidence: unavailable"
+
+    before = payload.get("source_before")
+    after = payload.get("source_after")
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return "capture_evidence: malformed"
+
+    stable_checks = payload.get("stable_checks", [])
+    if not isinstance(stable_checks, list):
+        stable_checks = []
+    missing_field_values: list[str] = []
+    for snapshot in (before, after):
+        values = snapshot.get("missing_fields", [])
+        if isinstance(values, list):
+            missing_field_values.extend(str(item) for item in values)
+    missing_fields = sorted(set(missing_field_values))
+    missing = ",".join(missing_fields) if missing_fields else "-"
+    return (
+        "capture_evidence: "
+        f"before_size={before.get('size', '-')} "
+        f"after_size={after.get('size', '-')} "
+        f"before_mtime_ns={before.get('mtime_ns', '-')} "
+        f"after_mtime_ns={after.get('mtime_ns', '-')} "
+        f"stable_checks={','.join(str(item) for item in stable_checks) or '-'} "
+        f"missing_fields={missing}"
+    )
+
+
 def _capture_files(
     role: str,
     files: list[Path],
@@ -646,6 +694,7 @@ def _capture_files(
                 size=captured.size,
                 semantic_role=_semantic_role(role, source),
                 format_hint=_format_hint(source),
+                capture_evidence_json=_capture_evidence_json(captured),
             )
         )
     return refs
@@ -3278,6 +3327,8 @@ def show_cmd(version: str, verbose: bool, show_full: bool) -> None:
                     f"  {ref.path} {ref.size} {_short_hash(ref.cas_hash)} "
                     f"{ref.semantic_role}/{ref.format_hint}"
                 )
+                if show_full:
+                    click.echo(f"    {_capture_evidence_summary(ref)}")
             if not show_full and len(items) > len(visible):
                 click.echo(f"  ... {len(items) - len(visible)} more; use --full")
 

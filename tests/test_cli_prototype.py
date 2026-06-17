@@ -305,6 +305,20 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "outputs: 2" in show.output
         assert "workspace: user/alice/APR" in show.output
         assert "inputs/top.v" in show.output
+        assert "capture_evidence:" in show.output
+        assert "before_size=" in show.output
+        assert "after_size=" in show.output
+
+        config, _ = find_config(workspace)
+        stored_refs = SQLiteMetadataRepository(config.metadata_db).get_file_refs(
+            first_version.group(1)
+        )
+        evidence_payloads = [
+            json.loads(ref.capture_evidence_json) for ref in stored_refs
+        ]
+        assert all(payload["schema"] == 1 for payload in evidence_payloads)
+        assert all("source_before" in payload for payload in evidence_payloads)
+        assert all("source_after" in payload for payload in evidence_payloads)
 
         verify = runner.invoke(main, ["verify", first_version.group(1)])
         assert verify.exit_code == 0, verify.output

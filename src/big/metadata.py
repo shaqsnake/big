@@ -39,6 +39,7 @@ class FileRef:
     size: int
     semantic_role: str
     format_hint: str
+    capture_evidence_json: str = "{}"
 
 
 @dataclass(frozen=True)
@@ -222,6 +223,7 @@ class SQLiteMetadataRepository(MetadataRepository):
                     size INTEGER NOT NULL,
                     semantic_role TEXT NOT NULL,
                     format_hint TEXT NOT NULL,
+                    capture_evidence_json TEXT NOT NULL DEFAULT '{}',
                     PRIMARY KEY (version_id, role, path),
                     FOREIGN KEY (version_id) REFERENCES versions(id)
                 );
@@ -362,6 +364,12 @@ class SQLiteMetadataRepository(MetadataRepository):
                 "versions",
                 "workspace_generation",
                 "INTEGER NOT NULL DEFAULT 0",
+            )
+            _ensure_column(
+                conn,
+                "file_refs",
+                "capture_evidence_json",
+                "TEXT NOT NULL DEFAULT '{}'",
             )
 
     def get_branch_head(self, branch: str) -> str | None:
@@ -1012,8 +1020,8 @@ class SQLiteMetadataRepository(MetadataRepository):
                 """
                 INSERT INTO file_refs(
                     version_id, role, path, cas_hash, size, semantic_role,
-                    format_hint
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    format_hint, capture_evidence_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -1024,6 +1032,7 @@ class SQLiteMetadataRepository(MetadataRepository):
                         item.size,
                         item.semantic_role,
                         item.format_hint,
+                        item.capture_evidence_json,
                     )
                     for item in file_refs
                 ],
@@ -1133,7 +1142,9 @@ class SQLiteMetadataRepository(MetadataRepository):
         with self.connect() as conn:
             rows = conn.execute(
                 """
-                SELECT role, path, cas_hash, size, semantic_role, format_hint
+                SELECT
+                    role, path, cas_hash, size, semantic_role, format_hint,
+                    capture_evidence_json
                 FROM file_refs
                 WHERE version_id = ?
                 ORDER BY role, path
@@ -1148,6 +1159,9 @@ class SQLiteMetadataRepository(MetadataRepository):
                 size=row["size"],
                 semantic_role=row["semantic_role"],
                 format_hint=row["format_hint"],
+                capture_evidence_json=_row_value(
+                    row, "capture_evidence_json", "{}"
+                ),
             )
             for row in rows
         ]
@@ -1182,7 +1196,7 @@ class SQLiteMetadataRepository(MetadataRepository):
                 """
                 SELECT
                     version_id, role, path, cas_hash, size, semantic_role,
-                    format_hint
+                    format_hint, capture_evidence_json
                 FROM file_refs
                 ORDER BY version_id, role, path
                 """
@@ -1197,6 +1211,9 @@ class SQLiteMetadataRepository(MetadataRepository):
                     size=row["size"],
                     semantic_role=row["semantic_role"],
                     format_hint=row["format_hint"],
+                    capture_evidence_json=_row_value(
+                        row, "capture_evidence_json", "{}"
+                    ),
                 ),
             )
             for row in rows
