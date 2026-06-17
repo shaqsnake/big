@@ -753,6 +753,57 @@ def _capture_evidence_summary(ref: FileRef) -> str:
     )
 
 
+def _capture_evidence_counts(refs: list[FileRef]) -> tuple[int, int]:
+    available = 0
+    unavailable = 0
+    for ref in refs:
+        try:
+            payload = json.loads(ref.capture_evidence_json or "{}")
+        except json.JSONDecodeError:
+            unavailable += 1
+            continue
+        if (
+            isinstance(payload, dict)
+            and isinstance(payload.get("source_before"), dict)
+            and isinstance(payload.get("source_after"), dict)
+        ):
+            available += 1
+        else:
+            unavailable += 1
+    return available, unavailable
+
+
+def _count_by(items: list[FileRef], field_name: str) -> str:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = str(getattr(item, field_name))
+        counts[value] = counts.get(value, 0) + 1
+    return ",".join(f"{key}={counts[key]}" for key in sorted(counts)) or "-"
+
+
+def _size_distribution(items: list[FileRef]) -> str:
+    if not items:
+        return "min=0 max=0 avg=0"
+    sizes = [item.size for item in items]
+    return (
+        f"min={min(sizes)} max={max(sizes)} "
+        f"avg={sum(sizes) // len(sizes)}"
+    )
+
+
+def _print_file_ref_summary(role: str, items: list[FileRef]) -> None:
+    evidence_available, evidence_unavailable = _capture_evidence_counts(items)
+    click.echo(f"{role}_summary:")
+    click.echo(f"  files: {len(items)} bytes: {sum(item.size for item in items)}")
+    click.echo(f"  semantic_roles: {_count_by(items, 'semantic_role')}")
+    click.echo(f"  format_hints: {_count_by(items, 'format_hint')}")
+    click.echo(f"  size: {_size_distribution(items)}")
+    click.echo(
+        "  capture_evidence: "
+        f"available={evidence_available} unavailable={evidence_unavailable}"
+    )
+
+
 def _capture_files(
     role: str,
     files: list[Path],
@@ -3384,6 +3435,7 @@ def show_cmd(version: str, verbose: bool, show_full: bool) -> None:
     click.echo(f"branch: {record.branch}")
     click.echo(f"parent: {record.parent_id or '-'}")
     click.echo(f"step: {record.step}")
+    click.echo(f"message: {record.message or '-'}")
     click.echo(f"author: {record.author}")
     click.echo(f"created_at: {record.created_at}")
     if record.workspace_id:
@@ -3401,6 +3453,8 @@ def show_cmd(version: str, verbose: bool, show_full: bool) -> None:
     click.echo(f"capture_mode: {record.capture_mode}")
 
     if verbose or show_full:
+        _print_file_ref_summary("input", inputs)
+        _print_file_ref_summary("output", outputs)
         by_role = {"input": inputs, "output": outputs}
         for role, items in by_role.items():
             click.echo(f"{role}s:")

@@ -334,13 +334,25 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
 
         show = runner.invoke(main, ["show", first_version.group(1), "--full"])
         assert show.exit_code == 0, show.output
+        assert "message: initial place snapshot" in show.output
         assert "inputs: 2" in show.output
         assert "outputs: 2" in show.output
         assert "workspace: user/alice/APR" in show.output
+        assert "input_summary:" in show.output
+        assert "output_summary:" in show.output
+        assert "semantic_roles: eda_design_file=1,script_or_config=1" in show.output
+        assert "format_hints: tcl=1,v=1" in show.output
+        assert "capture_evidence: available=2 unavailable=0" in show.output
         assert "inputs/top.v" in show.output
         assert "capture_evidence:" in show.output
         assert "before_size=" in show.output
         assert "after_size=" in show.output
+
+        show_default = runner.invoke(main, ["show", first_version.group(1)])
+        assert show_default.exit_code == 0, show_default.output
+        assert "message: initial place snapshot" in show_default.output
+        assert "inputs/top.v" not in show_default.output
+        assert "input_summary:" not in show_default.output
 
         config, _ = find_config(workspace)
         stored_refs = SQLiteMetadataRepository(config.metadata_db).get_file_refs(
