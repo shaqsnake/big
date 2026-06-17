@@ -3526,6 +3526,13 @@ def lineage_cmd(
             f"branch={item.branch} step={item.step} "
             f"state=[{item.review_state}/{item.retention_state}]"
         )
+        if verbose or show_full:
+            edge_type = "target" if depth == 0 else "parent"
+            click.echo(f"    edge_type: {edge_type}")
+            click.echo(f"    author: {item.author}")
+            click.echo(f"    created_at: {item.created_at}")
+            click.echo(f"    recipe_hash: {_short_hash(item.recipe_hash)}")
+            click.echo(f"    manifest_hash: {_short_hash(item.manifest_hash)}")
         if item.workspace_id:
             click.echo(f"    workspace: {item.workspace_id}")
         if item.restored_from_version_id:
@@ -3559,8 +3566,39 @@ def lineage_cmd(
                 f"branch={upstream.branch} step={upstream.step} "
                 f"path={path} state=[{upstream.review_state}/{upstream.retention_state}]"
             )
+            if verbose or show_full:
+                click.echo(
+                    f"        upstream_author: {upstream.author} "
+                    f"created_at={upstream.created_at} "
+                    f"recipe_hash={_short_hash(upstream.recipe_hash)}"
+                )
+            if show_full:
+                _print_lineage_edge_evidence(metadata, upstream, edge)
         if item.message:
             click.echo(f"    message: {item.message}")
+
+
+def _print_lineage_edge_evidence(
+    metadata: SQLiteMetadataRepository,
+    upstream: VersionRecord,
+    edge: ProvenanceEdge,
+) -> None:
+    evidence = _edge_evidence(edge)
+    path = str(evidence.get("path", ""))
+    click.echo(f"        evidence_manifest: {_short_hash(upstream.manifest_hash)}")
+    if path:
+        ref = next(
+            (item for item in metadata.get_file_refs(upstream.id) if item.path == path),
+            None,
+        )
+        if ref is None:
+            click.echo(f"        evidence_ref: missing path={path}")
+        else:
+            click.echo(
+                f"        evidence_ref: {ref.role} {ref.path} "
+                f"{_short_hash(ref.cas_hash)} {ref.size}"
+            )
+    click.echo(f"        evidence_json: {edge.evidence_json}")
 
 
 @main.command("impact")

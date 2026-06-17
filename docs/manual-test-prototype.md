@@ -192,6 +192,7 @@ big repo verify
 - `big status` 显示当前 workspace 的 `head` 等于刚才提交的 version ID
 - `big log` 显示刚才的 version ID
 - `big lineage <version>` 显示从目标 version 向前追溯的 parent chain；如果 commit 时声明了 `--cross-branch-input`，也会在对应节点下显示直接 `consumes` 上游边。
+- `big lineage <version> --verbose` 展示每个节点的 edge_type、author、created_at、recipe_hash 和 manifest_hash；`--full` 额外展开 consumes evidence 对应的 manifest 和 FileRef 摘要。
 - `big lineage <version> --changes` 为每个 parent-chain 节点显示 `recipe_change`、inputs added/removed/modified 数量和少量 changed input 摘要；`--verbose` 展示更多路径，`--full` 展开全部 changed inputs。
 - `lineage --changes` 只比较 inputs，不把 outputs 或 lifecycle/retention 状态变化误报为 recipe 变化；`consumes` 边作为数据依赖展示，不会被当作同一 branch 的 parent 修改。
 - `big show <version>` 展示 message、inputs/outputs 数量、SHA-256 摘要和状态 `[Exploring/resident]`

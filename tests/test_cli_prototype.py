@@ -784,6 +784,20 @@ def test_commit_can_record_cross_branch_consumes_lineage(tmp_path: Path) -> None
         ) in lineage.output
         assert "branch=workspace/default/bob/STA" in lineage.output
 
+        lineage_full = runner.invoke(
+            main, ["lineage", downstream_version.group(1), "--full"]
+        )
+        assert lineage_full.exit_code == 0, lineage_full.output
+        assert "edge_type: target" in lineage_full.output
+        assert "author:" in lineage_full.output
+        assert "created_at:" in lineage_full.output
+        assert "recipe_hash:" in lineage_full.output
+        assert "manifest_hash:" in lineage_full.output
+        assert "upstream_author:" in lineage_full.output
+        assert "evidence_manifest:" in lineage_full.output
+        assert "evidence_ref: output outputs/top.def" in lineage_full.output
+        assert "evidence_json:" in lineage_full.output
+
         missing = runner.invoke(
             main,
             [
