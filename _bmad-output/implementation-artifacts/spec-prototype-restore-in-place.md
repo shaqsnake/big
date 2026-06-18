@@ -19,7 +19,7 @@ context:
 
 ## Boundaries
 
-- 本切片不实现 Linux groups/ACL 检查。
+- `big restore --in-place` 的写权限由 `spec-prototype-branch-acl.md` 覆盖；当前身份必须对当前 ref 有 write 权限。
 - 本切片只检测 `big run` 创建的活动受管 lease；手工从外部 shell 直接启动的 EDA 写入进程不会自动生成 lease，用户仍必须通过 `--confirm RESTORE` 表示已确认目录静默。
 - 本切片只支持恢复到当前 head 或祖先版本，不支持跨血缘原地改写。
 - 本切片只支持 `resident` 目标版本；`recipe_only` 目标继续通过 inputs-only checkout 表达降级物化。

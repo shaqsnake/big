@@ -21,7 +21,7 @@ context:
 
 - 本切片只做 manifest 文件级选择，不实现懒加载、按需补齐、远端召回或文件系统透明投影。
 - 本切片不改变默认 checkout 语义；普通 `big checkout <branch>` 仍 full checkout。
-- 本切片不实现 Linux groups/ACL，因此 read 权限拒绝路径仍留给后续权限切片。
+- `big checkout` 的 read 权限由 `spec-prototype-branch-acl.md` 覆盖；无权限时在解析目标、输出 checkout target path 或物化文件前拒绝。
 - 本切片不在已有 partial 目录中补齐、删除或覆盖不同选择集合；不同 selection hash 对应不同目标目录。
 - `recipe_only` version 默认仍使用 inputs-only checkout；显式 include/exclude 只在当前可物化 FileRef 集合内继续缩小选择范围。
 

@@ -22,7 +22,7 @@ context:
 - 普通 reset 只允许目标 version 是当前 head 的祖先版本。
 - 目标 version 不存在、前缀歧义、当前 ref 没有 head、或目标不在当前可达历史链上时拒绝。
 - 当前 head 已等于目标 version 时返回 no-op，不重复写审计事件。
-- 原型阶段尚未接入 Linux groups/ACL，权限拒绝路径留给后续权限切片。
+- `big reset` 的写权限由 `spec-prototype-branch-acl.md` 覆盖；当前身份必须对当前 ref 有 write 权限。
 
 ## Suggested Review Order
 
