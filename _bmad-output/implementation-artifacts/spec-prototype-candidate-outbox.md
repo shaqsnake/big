@@ -13,7 +13,7 @@ context:
 
 ## Intent
 
-**问题：** 架构要求 Candidate 状态迁移、审计和 outbox 事件同事务提交，但当前原型在 `big promote --to Candidate` 后只输出 `candidate_outbox: not-implemented`。用户无法验证“Candidate 已可靠入队，后续交付系统可幂等消费”的最小语义。
+**问题：** 架构要求 Candidate 状态迁移、审计和 outbox 事件同事务提交。本切片之前，原型在 `big promote --to Candidate` 后没有可靠 outbox 记录，用户无法验证“Candidate 已可靠入队，后续交付系统可幂等消费”的最小语义。
 
 **方案：** 在 SQLite metadata adapter 中增加本地 `outbox_event` 表。`big promote <version> --to Candidate` 从非 Candidate 状态成功迁移到 Candidate 时，在同一个 metadata transaction 内写入 lifecycle event、audit event 和 `artifact.candidate_marked` outbox event。新增只读命令 `big outbox list [--full] [--all]` 查看 pending 事件。
 

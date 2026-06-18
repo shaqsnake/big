@@ -12,7 +12,7 @@ context:
 
 ## Intent
 
-**问题：** Story 2.6 要求显式原地 restore 能拒绝活动受管 lease，避免 BIG 自己启动的流程命令仍在读写 workspace 时被 restore 原地改写。此前原型只能输出 `active_lease_check: not-implemented`，无法验证该保护边界。
+**问题：** Story 2.6 要求显式原地 restore 能拒绝活动受管 lease，避免 BIG 自己启动的流程命令仍在读写 workspace 时被 restore 原地改写。本切片之前，原型只有 active lease 检查占位输出，无法验证该保护边界。
 
 **方案：** 增加 `big run -- <command>`。命令在当前 BIG workspace 中创建 `.big/leases/<lease>.json`，记录 repo、branch、workspace、actor、host、runner pid、child pid、命令和开始时间；子命令退出后删除 lease，并回显 exit code。`big restore --in-place` 在 dirty 检查后扫描同一 workspace 的 active lease，发现后拒绝执行并输出 lease 摘要。
 
