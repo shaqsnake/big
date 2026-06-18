@@ -272,7 +272,7 @@ big audit verify
 
 期望：
 
-- `big audit log --full` 展示最近写操作的 action、entity、actor、时间、event hash、previous hash 和 payload 摘要
+- `big audit log --full` 展示当前身份有 read 权限的最近写操作 action、entity、actor、时间、event hash、previous hash 和 payload 摘要；无权限事件不会显示 action、entity 或 payload，只显示 `restricted: <count>`
 - `big audit verify` 输出 `integrity: ok`
 - 当前原型只实现本地 hash-chain 校验；还没有实现服务端 append-only 审计日志、外部不可变介质锚定或审计导出。
 
@@ -575,9 +575,10 @@ big branch acl grant feature/place --group apr_team --write
 - `branch acl grant --read` 将 `group:apr_team` 加入 read groups
 - `branch acl grant --write` 将 `group:apr_team` 加入 write groups，同时 write 隐含 read
 - ACL 变更会写入 audit hash-chain；当前原型已经对核心 read/write 命令做基础权限拦截。
-- read 权限覆盖 branch list、branch show、branch acl show、branch events、checkout、log、show、lineage、lifecycle events、outbox list、verify 和 diff。
+- read 权限覆盖 branch list、branch show、branch acl show、branch events、checkout、log、show、lineage、lifecycle events、outbox list、audit log、verify 和 diff。
 - `branch list` 只显示当前身份有 read 权限的 branch；受限 branch 不泄露名称、head 或 source ref，只用 `restricted: <count>` 提示被隐藏数量。
 - `outbox list` 只显示当前身份有 read 权限的 Candidate version 事件；受限事件不泄露 event id、version id 或 payload，只用 `restricted: <count>` 提示被隐藏数量。
+- `audit log` 只显示当前身份有 read 权限的 branch/version/workspace 事件；受限事件不泄露 action、entity 或 payload，只用 `restricted: <count>` 提示被隐藏数量。`audit verify` 仍检查完整 hash-chain。
 - write 权限覆盖 commit、reset、restore、promote、lifecycle degrade 和 branch acl grant。
 - 原型测试时可用 `BIG_IDENTITY_USER` 与 `BIG_IDENTITY_GROUPS` 临时模拟不同 Linux group session；生产方案仍应使用当前进程可见的 Linux/NSS groups。
 

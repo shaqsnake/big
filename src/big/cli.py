@@ -430,6 +430,17 @@ def _require_version_permission(
         _require_branch_permission(metadata, version.branch, permission)
 
 
+def _branch_ref_permission_allowed(
+    metadata: SQLiteMetadataRepository,
+    branch_name: str,
+    permission: str,
+) -> bool:
+    record = metadata.get_branch(branch_name)
+    if record is None:
+        return False
+    return _branch_permission_allowed(record, permission)
+
+
 def _version_permission_allowed(
     metadata: SQLiteMetadataRepository,
     version: VersionRecord,
@@ -437,10 +448,7 @@ def _version_permission_allowed(
 ) -> bool:
     if not version.branch:
         return True
-    record = metadata.get_branch(version.branch)
-    if record is None:
-        return False
-    return _branch_permission_allowed(record, permission)
+    return _branch_ref_permission_allowed(metadata, version.branch, permission)
 
 
 def _outbox_event_allowed(
@@ -461,6 +469,33 @@ def _outbox_event_allowed(
     if version is None:
         return False
     return _version_permission_allowed(metadata, version, "read")
+
+
+def _audit_event_allowed(
+    metadata: SQLiteMetadataRepository,
+    event: object,
+) -> bool:
+    entity_type = str(event.entity_type)
+    entity_id = str(event.entity_id)
+    if entity_type == "branch":
+        return _branch_ref_permission_allowed(metadata, entity_id, "read")
+    if entity_type == "version":
+        version = metadata.get_version(entity_id)
+        if version is None:
+            return False
+        return _version_permission_allowed(metadata, version, "read")
+    if entity_type == "workspace":
+        try:
+            payload = json.loads(str(event.payload_json or "{}"))
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        branch = str(payload.get("branch", "")).strip()
+        if not branch:
+            return False
+        return _branch_ref_permission_allowed(metadata, branch, "read")
+    return False
 
 
 def _expand_pattern_args(patterns: tuple[str, ...]) -> list[str]:
@@ -2958,7 +2993,15 @@ def audit_log_cmd(limit: int, show_full: bool) -> None:
         click.echo("No audit events.")
         return
 
-    for item in events:
+    visible = [item for item in events if _audit_event_allowed(metadata, item)]
+    restricted = len(events) - len(visible)
+    if not visible:
+        click.echo("No visible audit events.")
+        if restricted:
+            click.echo(f"restricted: {restricted}")
+        return
+
+    for item in visible:
         previous = _short_hash(item.previous_hash) if item.previous_hash else "-"
         click.echo(
             f"{item.id} {item.action} {item.entity_type} {item.entity_id} "
@@ -2967,6 +3010,8 @@ def audit_log_cmd(limit: int, show_full: bool) -> None:
         )
         if show_full:
             click.echo(f"  payload: {item.payload_json}")
+    if restricted:
+        click.echo(f"restricted: {restricted}")
 
 
 @audit.command("verify")

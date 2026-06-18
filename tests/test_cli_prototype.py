@@ -1377,6 +1377,18 @@ def test_branch_acl_grant_show_and_inherit(tmp_path: Path) -> None:
             in denied_lifecycle_events.output
         )
 
+        denied_audit_log = runner.invoke(
+            main,
+            ["audit", "log", "--full"],
+            env=outsider_env,
+        )
+        assert denied_audit_log.exit_code == 0, denied_audit_log.output
+        assert "No visible audit events." in denied_audit_log.output
+        assert "restricted: 2" in denied_audit_log.output
+        assert commit_version.group(1) not in denied_audit_log.output
+        assert "feature/acl" not in denied_audit_log.output
+        assert "workspace/default/alice/APR" not in denied_audit_log.output
+
         missing_permission = runner.invoke(
             main, ["branch", "acl", "grant", "feature/acl", "--group", "apr_team"]
         )

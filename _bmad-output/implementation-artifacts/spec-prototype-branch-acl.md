@@ -14,7 +14,7 @@ context:
 
 **问题：** Story 2.1 要求分支访问权限绑定到公司现有 Linux groups，而不是维护大量用户名单。原型此前只有 branch owner 字段，没有 group ACL、继承、展示或 ACL 变更审计；即使有 ACL 元数据，也还不能阻止无权限用户读取 branch manifest 或写入 branch。
 
-**方案：** 在 branch metadata 中增加 `owner_group`、`read_groups` 和 `write_groups`。`big branch create` 默认继承 source branch ACL；若 source branch 没有 ACL，则使用当前进程可见的 primary group 创建默认 owner/read/write group；也可以通过 `--acl-template <name>` 套用中心 `big.toml` 中的 `[[acl_templates]]`。当项目配置 `[acl] validate_groups = true` 时，模板应用和 `branch acl grant` 会通过当前进程可用的 Linux/NSS group resolver 校验 group 是否存在。新增 `big branch acl show <branch> [--effective]` 和 `big branch acl grant <branch> --group <linux-group> --read|--write`。`write` 隐含 `read`，ACL 变更写入 audit hash-chain。基础 enforcement 覆盖 `branch list`、`branch show`、`branch acl show`、`branch events`、`checkout`、`log`、`show`、`lineage`、`lifecycle events`、`outbox list`、`verify`、`diff` 的 read 权限，以及 `commit`、`reset`、`restore`、`promote`、`lifecycle degrade`、`branch acl grant` 的 write 权限；其中 `branch list` 和 `outbox list` 只显示当前身份有 read 权限的条目，并用 `restricted` 计数表示被隐藏的条目数量。
+**方案：** 在 branch metadata 中增加 `owner_group`、`read_groups` 和 `write_groups`。`big branch create` 默认继承 source branch ACL；若 source branch 没有 ACL，则使用当前进程可见的 primary group 创建默认 owner/read/write group；也可以通过 `--acl-template <name>` 套用中心 `big.toml` 中的 `[[acl_templates]]`。当项目配置 `[acl] validate_groups = true` 时，模板应用和 `branch acl grant` 会通过当前进程可用的 Linux/NSS group resolver 校验 group 是否存在。新增 `big branch acl show <branch> [--effective]` 和 `big branch acl grant <branch> --group <linux-group> --read|--write`。`write` 隐含 `read`，ACL 变更写入 audit hash-chain。基础 enforcement 覆盖 `branch list`、`branch show`、`branch acl show`、`branch events`、`checkout`、`log`、`show`、`lineage`、`lifecycle events`、`outbox list`、`audit log`、`verify`、`diff` 的 read 权限，以及 `commit`、`reset`、`restore`、`promote`、`lifecycle degrade`、`branch acl grant` 的 write 权限；其中 `branch list`、`outbox list` 和 `audit log` 只显示当前身份有 read 权限的条目，并用 `restricted` 计数表示被隐藏的条目数量。
 
 ## Boundaries
 
@@ -72,6 +72,10 @@ context:
 - Given 当前用户不在 Candidate version 所属 branch 的 read/write groups 中，且不是 branch owner
 - When 用户执行 `big outbox list --full`
 - Then 系统不显示该受限 outbox event 的 id、version id 或 payload，只输出 `restricted` 计数。
+
+- Given 当前用户不在某条 audit event 关联 branch/version 的 read/write groups 中，且不是 branch owner
+- When 用户执行 `big audit log --full`
+- Then 系统不显示该受限 audit event 的 action、entity 或 payload，只输出 `restricted` 计数。
 
 - Given 当前用户只有 read group
 - When 用户执行 `big commit --branch <branch>` 或 `big branch acl grant <branch> --group pv_team --read`
