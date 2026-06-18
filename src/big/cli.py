@@ -2897,6 +2897,7 @@ def lifecycle_events_cmd(version: str, limit: int) -> None:
     record = metadata.get_version(version)
     if record is None:
         raise click.ClickException(f"Version not found or ambiguous: {version}")
+    _require_version_permission(metadata, record, "read")
 
     events = metadata.list_lifecycle_events(record.id, limit=limit)
     if not events:

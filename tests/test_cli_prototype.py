@@ -1304,6 +1304,8 @@ def test_branch_acl_grant_show_and_inherit(tmp_path: Path) -> None:
             ],
         )
         assert commit.exit_code == 0, commit.output
+        commit_version = re.search(r"version: (v[0-9a-f]+)", commit.output)
+        assert commit_version
 
         create = runner.invoke(main, ["branch", "create", "feature/acl"])
         assert create.exit_code == 0, create.output
@@ -1348,6 +1350,17 @@ def test_branch_acl_grant_show_and_inherit(tmp_path: Path) -> None:
         assert "main" in outsider_branch_list.output
         assert "feature/acl" not in outsider_branch_list.output
         assert "restricted: 1" in outsider_branch_list.output
+
+        denied_lifecycle_events = runner.invoke(
+            main,
+            ["lifecycle", "events", commit_version.group(1)],
+            env=outsider_env,
+        )
+        assert denied_lifecycle_events.exit_code != 0
+        assert (
+            "Permission denied: read access to branch workspace/default/alice/APR"
+            in denied_lifecycle_events.output
+        )
 
         missing_permission = runner.invoke(
             main, ["branch", "acl", "grant", "feature/acl", "--group", "apr_team"]
