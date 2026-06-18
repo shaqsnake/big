@@ -392,6 +392,21 @@ def _permission_denied(branch_name: str, permission: str) -> click.ClickExceptio
     )
 
 
+def _branch_permission_allowed(record: object, permission: str) -> bool:
+    if _branch_acl_unset(record):
+        return True
+
+    effective_read, effective_write, _, _ = _effective_acl(
+        record,
+        _current_identity(),
+    )
+    if permission == "read":
+        return effective_read
+    if permission == "write":
+        return effective_write
+    raise ValueError(f"Unknown branch permission: {permission}")
+
+
 def _require_branch_permission(
     metadata: SQLiteMetadataRepository,
     branch_name: str,
@@ -400,16 +415,8 @@ def _require_branch_permission(
     record = metadata.get_branch(branch_name)
     if record is None:
         raise click.ClickException(f"Branch/ref not found: {branch_name}")
-    if _branch_acl_unset(record):
-        return record
 
-    effective_read, effective_write, _, _ = _effective_acl(
-        record,
-        _current_identity(),
-    )
-    if permission == "read" and not effective_read:
-        raise _permission_denied(branch_name, permission)
-    if permission == "write" and not effective_write:
+    if not _branch_permission_allowed(record, permission):
         raise _permission_denied(branch_name, permission)
     return record
 
@@ -3058,11 +3065,23 @@ def branch_list_cmd(include_workspace: bool) -> None:
     if not branches:
         click.echo("No branches found.")
         return
-    for item in branches:
+    visible = [
+        item for item in branches if _branch_permission_allowed(item, "read")
+    ]
+    restricted = len(branches) - len(visible)
+    if not visible:
+        click.echo("No visible branches.")
+        if restricted:
+            click.echo(f"restricted: {restricted}")
+        return
+
+    for item in visible:
         head = item.head_version_id or "-"
         owner = item.owner or "-"
         source = item.source_ref or "-"
         click.echo(f"{item.kind} {item.name} {head} {owner} {source}")
+    if restricted:
+        click.echo(f"restricted: {restricted}")
 
 
 @branch.group("acl")

@@ -1341,6 +1341,14 @@ def test_branch_acl_grant_show_and_inherit(tmp_path: Path) -> None:
             in denied_checkout.output
         )
 
+        outsider_branch_list = runner.invoke(
+            main, ["branch", "list"], env=outsider_env
+        )
+        assert outsider_branch_list.exit_code == 0, outsider_branch_list.output
+        assert "main" in outsider_branch_list.output
+        assert "feature/acl" not in outsider_branch_list.output
+        assert "restricted: 1" in outsider_branch_list.output
+
         missing_permission = runner.invoke(
             main, ["branch", "acl", "grant", "feature/acl", "--group", "apr_team"]
         )
