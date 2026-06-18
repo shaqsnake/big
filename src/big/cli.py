@@ -2354,6 +2354,16 @@ def status_cmd() -> None:
     click.echo(f"flow: {workspace_context.flow}")
     click.echo(f"workspace_path: {workspace_context.workspace_path}")
     click.echo(f"default_ref: {default_ref}")
+
+    branch_record = metadata.get_branch(default_ref)
+    if branch_record is not None and not _branch_permission_allowed(
+        branch_record,
+        "read",
+    ):
+        click.echo("head: restricted")
+        click.echo("permission: read denied")
+        return
+
     click.echo(f"head: {head or '-'}")
 
     if head is None:

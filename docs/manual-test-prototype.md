@@ -575,7 +575,8 @@ big branch acl grant feature/place --group apr_team --write
 - `branch acl grant --read` 将 `group:apr_team` 加入 read groups
 - `branch acl grant --write` 将 `group:apr_team` 加入 write groups，同时 write 隐含 read
 - ACL 变更会写入 audit hash-chain；当前原型已经对核心 read/write 命令做基础权限拦截。
-- read 权限覆盖 branch list、branch show、branch acl show、branch events、checkout、log、show、lineage、lifecycle events、outbox list、audit log、verify 和 diff。
+- read 权限覆盖 status、branch list、branch show、branch acl show、branch events、checkout、log、show、lineage、lifecycle events、outbox list、audit log、verify 和 diff。
+- `status` 在无 read 权限时仍显示 repo/workspace 上下文，但会把 head 详情显示为 `restricted`，不泄露 version id、step、state 或 message。
 - `branch list` 只显示当前身份有 read 权限的 branch；受限 branch 不泄露名称、head 或 source ref，只用 `restricted: <count>` 提示被隐藏数量。
 - `outbox list` 只显示当前身份有 read 权限的 Candidate version 事件；受限事件不泄露 event id、version id 或 payload，只用 `restricted: <count>` 提示被隐藏数量。
 - `audit log` 只显示当前身份有 read 权限的 branch/version/workspace 事件；受限事件不泄露 action、entity 或 payload，只用 `restricted: <count>` 提示被隐藏数量。`audit verify` 仍检查完整 hash-chain。

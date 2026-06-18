@@ -1366,6 +1366,15 @@ def test_branch_acl_grant_show_and_inherit(tmp_path: Path) -> None:
         assert "feature/acl" not in outsider_branch_list.output
         assert "restricted: 1" in outsider_branch_list.output
 
+        restricted_status = runner.invoke(main, ["status"], env=outsider_env)
+        assert restricted_status.exit_code == 0, restricted_status.output
+        assert "default_ref: workspace/default/alice/APR" in restricted_status.output
+        assert "head: restricted" in restricted_status.output
+        assert "permission: read denied" in restricted_status.output
+        assert commit_version.group(1) not in restricted_status.output
+        assert "head_step:" not in restricted_status.output
+        assert "head_message:" not in restricted_status.output
+
         denied_lifecycle_events = runner.invoke(
             main,
             ["lifecycle", "events", commit_version.group(1)],
