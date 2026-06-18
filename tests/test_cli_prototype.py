@@ -928,13 +928,17 @@ def test_impact_lists_direct_and_recursive_consumes(tmp_path: Path) -> None:
 
         recursive = runner.invoke(
             main,
-            ["impact", upstream_version.group(1), "--depth", "2", "--verbose"],
+            ["impact", upstream_version.group(1), "--depth", "2", "--full"],
         )
         assert recursive.exit_code == 0, recursive.output
         assert f"1 {bob_version.group(1)} edge=consumes" in recursive.output
         assert f"2 {carol_version.group(1)} edge=consumes" in recursive.output
         assert "evidence_path: outputs/top.def" in recursive.output
         assert "evidence_path: outputs/timing.rpt" in recursive.output
+        assert "evidence_manifest:" in recursive.output
+        assert "evidence_ref: output outputs/top.def" in recursive.output
+        assert "evidence_ref: output outputs/timing.rpt" in recursive.output
+        assert "evidence_json:" in recursive.output
         assert "visible_downstream: 2" in recursive.output
 
         no_impact = runner.invoke(main, ["impact", carol_version.group(1)])

@@ -3615,32 +3615,34 @@ def lineage_cmd(
                     f"recipe_hash={_short_hash(upstream.recipe_hash)}"
                 )
             if show_full:
-                _print_lineage_edge_evidence(metadata, upstream, edge)
+                _print_edge_evidence(metadata, upstream, edge, indent="        ")
         if item.message:
             click.echo(f"    message: {item.message}")
 
 
-def _print_lineage_edge_evidence(
+def _print_edge_evidence(
     metadata: SQLiteMetadataRepository,
     upstream: VersionRecord,
     edge: ProvenanceEdge,
+    *,
+    indent: str,
 ) -> None:
     evidence = _edge_evidence(edge)
     path = str(evidence.get("path", ""))
-    click.echo(f"        evidence_manifest: {_short_hash(upstream.manifest_hash)}")
+    click.echo(f"{indent}evidence_manifest: {_short_hash(upstream.manifest_hash)}")
     if path:
         ref = next(
             (item for item in metadata.get_file_refs(upstream.id) if item.path == path),
             None,
         )
         if ref is None:
-            click.echo(f"        evidence_ref: missing path={path}")
+            click.echo(f"{indent}evidence_ref: missing path={path}")
         else:
             click.echo(
-                f"        evidence_ref: {ref.role} {ref.path} "
+                f"{indent}evidence_ref: {ref.role} {ref.path} "
                 f"{_short_hash(ref.cas_hash)} {ref.size}"
             )
-    click.echo(f"        evidence_json: {edge.evidence_json}")
+    click.echo(f"{indent}evidence_json: {edge.evidence_json}")
 
 
 @main.command("impact")
@@ -3702,6 +3704,8 @@ def impact_cmd(version: str, depth: int, verbose: bool, show_full: bool) -> None
                     f"    evidence_path: {path} "
                     f"actor={edge.actor or '-'} created_at={edge.created_at or '-'}"
                 )
+            if show_full:
+                _print_edge_evidence(metadata, upstream, edge, indent="    ")
             if edge_depth < depth and downstream.id not in expanded:
                 queue.append((edge_depth, downstream))
 
