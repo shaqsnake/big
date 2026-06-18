@@ -171,6 +171,7 @@ big repo stats
 期望：
 
 - 输出 `versions`、`file_refs`、`logical_bytes`、`unique_referenced_bytes`、`cas_objects` 和 `cas_bytes`
+- 输出 `scope: repo-wide` 和 `acl_filter: no`，表示这是仓库维护/管理员视角，不是按 branch ACL 过滤后的普通用户视图
 - 输出 `dedupe_ratio: ...x`
 - 输出按 `review_state` 聚合的版本数和逻辑字节数，例如 `Exploring`、`Candidate`
 - 输出按 `retention_state` 聚合的版本数和逻辑字节数，例如 `resident`
@@ -199,7 +200,7 @@ big repo verify
 - `big show <version>` 展示 message、inputs/outputs 数量、SHA-256 摘要和状态 `[Exploring/resident]`
 - `big show --full` 额外展示 inputs/outputs 分类摘要、semantic_role/format_hint 计数、size 分布，以及每个 FileRef 的 `capture_evidence` 摘要
 - `big verify <version>` 输出 `integrity: ok`，表示该 version manifest 引用的 CAS 对象存在、大小一致且 SHA-256 校验通过。
-- `big repo verify` 输出 `integrity: ok`，表示仓库内所有 manifest 引用的 CAS 对象都通过完整性检查；如果失败，可加 `--full` 查看具体 version 和 FileRef。
+- `big repo verify` 输出 `scope: repo-wide`、`acl_filter: no` 和 `integrity: ok`，表示仓库内所有 manifest 引用的 CAS 对象都通过完整性检查；如果失败，可加 `--full` 查看具体 version 和 FileRef。
 
 显式记录跨分支 consumes 输入：
 

@@ -374,6 +374,8 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         repo_verify = runner.invoke(main, ["repo", "verify"])
         assert repo_verify.exit_code == 0, repo_verify.output
         assert "repo: DemoChip" in repo_verify.output
+        assert "scope: repo-wide" in repo_verify.output
+        assert "acl_filter: no" in repo_verify.output
         assert "versions: 1" in repo_verify.output
         assert "file_refs: 4" in repo_verify.output
         assert "integrity: ok" in repo_verify.output
@@ -381,6 +383,8 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         stats = runner.invoke(main, ["repo", "stats"])
         assert stats.exit_code == 0, stats.output
         assert "repo: DemoChip" in stats.output
+        assert "scope: repo-wide" in stats.output
+        assert "acl_filter: no" in stats.output
         assert "versions: 1" in stats.output
         assert "file_refs: 4" in stats.output
         assert "unique_referenced_objects: 4" in stats.output

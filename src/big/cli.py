@@ -2043,6 +2043,8 @@ def repo_stats_cmd() -> None:
     )
 
     click.echo(f"repo: {config.repo_id}")
+    click.echo("scope: repo-wide")
+    click.echo("acl_filter: no")
     click.echo(f"versions: {summary.versions}")
     click.echo(f"file_refs: {summary.file_refs}")
     click.echo(f"logical_bytes: {summary.logical_bytes}")
@@ -2088,6 +2090,8 @@ def repo_verify_cmd(show_full: bool) -> None:
     failures = len(missing) + len(size_mismatch) + len(hash_mismatch)
 
     click.echo(f"repo: {config.repo_id}")
+    click.echo("scope: repo-wide")
+    click.echo("acl_filter: no")
     click.echo(f"versions: {summary.versions}")
     click.echo(f"file_refs: {len(refs)}")
     click.echo(f"required_file_refs: {len(required_refs)}")
