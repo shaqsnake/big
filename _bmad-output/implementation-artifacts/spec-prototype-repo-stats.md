@@ -7,6 +7,7 @@ route: 'one-shot'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-prototype-verify.md'
+  - '{project-root}/_bmad-output/implementation-artifacts/spec-prototype-repo-admin-policy.md'
 ---
 
 # 原型仓库存储统计
@@ -30,4 +31,4 @@ context:
 
 ## Revision 2026-06-18
 
-`repo stats` 输出增加 `scope: repo-wide` 和 `acl_filter: no`。在 repo-wide admin policy 尚未实现前，该命令保持完整仓库维护语义；普通用户可见性过滤由 `branch list`、`status`、`log`、`show`、`verify`、`diff`、`lineage`、`impact`、`outbox list` 和 `audit log` 等 branch/version 视图负责。
+`repo stats` 输出增加 `scope: repo-wide` 和 `acl_filter: no`。普通用户可见性过滤由 `branch list`、`status`、`log`、`show`、`verify`、`diff`、`lineage`、`impact`、`outbox list` 和 `audit log` 等 branch/version 视图负责；repo-wide 执行权限由 `spec-prototype-repo-admin-policy.md` 覆盖。

@@ -376,6 +376,7 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "repo: DemoChip" in repo_verify.output
         assert "scope: repo-wide" in repo_verify.output
         assert "acl_filter: no" in repo_verify.output
+        assert "admin_policy: none" in repo_verify.output
         assert "versions: 1" in repo_verify.output
         assert "file_refs: 4" in repo_verify.output
         assert "integrity: ok" in repo_verify.output
@@ -385,6 +386,7 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert "repo: DemoChip" in stats.output
         assert "scope: repo-wide" in stats.output
         assert "acl_filter: no" in stats.output
+        assert "admin_policy: none" in stats.output
         assert "versions: 1" in stats.output
         assert "file_refs: 4" in stats.output
         assert "unique_referenced_objects: 4" in stats.output
@@ -1736,6 +1738,74 @@ owner_group = "group:no_such_group"
         assert audit_verify.exit_code == 0, audit_verify.output
         assert "events: 2" in audit_verify.output
         assert "integrity: ok" in audit_verify.output
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_repo_admin_policy_gates_repo_wide_commands(tmp_path: Path) -> None:
+    runner = CliRunner()
+    repo_root = tmp_path / "data" / "DemoChip"
+    workspace = repo_root / "user" / "alice" / "APR"
+    _write(workspace / "inputs" / "top.v", "module top; endmodule\n")
+    _write(workspace / "outputs" / "top.def", "VERSION 5.8 ;\n")
+    assert runner.invoke(
+        main, ["repo", "init", str(repo_root), "--repo-id", "DemoChip"]
+    ).exit_code == 0
+    config_path = repo_root / "big.toml"
+    config_path.write_text(
+        config_path.read_text(encoding="utf-8")
+        + """
+
+[admin]
+groups = ["group:repo_admins"]
+""",
+        encoding="utf-8",
+    )
+
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(workspace)
+        commit = runner.invoke(
+            main,
+            [
+                "commit",
+                "--step",
+                "place",
+                "--inputs",
+                "inputs/**",
+                "--outputs",
+                "outputs/**",
+                "--message",
+                "repo admin policy base",
+            ],
+        )
+        assert commit.exit_code == 0, commit.output
+
+        denied_env = {
+            "BIG_IDENTITY_USER": "mallory",
+            "BIG_IDENTITY_GROUPS": "outsiders",
+        }
+        denied_stats = runner.invoke(main, ["repo", "stats"], env=denied_env)
+        assert denied_stats.exit_code != 0
+        assert "Permission denied: repo admin access" in denied_stats.output
+
+        denied_verify = runner.invoke(main, ["repo", "verify"], env=denied_env)
+        assert denied_verify.exit_code != 0
+        assert "Permission denied: repo admin access" in denied_verify.output
+
+        admin_env = {
+            "BIG_IDENTITY_USER": "repo-admin",
+            "BIG_IDENTITY_GROUPS": "repo_admins",
+        }
+        stats = runner.invoke(main, ["repo", "stats"], env=admin_env)
+        assert stats.exit_code == 0, stats.output
+        assert "admin_policy: groups" in stats.output
+        assert "versions: 1" in stats.output
+
+        verify = runner.invoke(main, ["repo", "verify"], env=admin_env)
+        assert verify.exit_code == 0, verify.output
+        assert "admin_policy: groups" in verify.output
+        assert "integrity: ok" in verify.output
     finally:
         os.chdir(old_cwd)
 

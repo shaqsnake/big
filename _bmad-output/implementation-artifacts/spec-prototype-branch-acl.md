@@ -23,7 +23,7 @@ context:
 - 原型测试可通过 `BIG_IDENTITY_USER` 和 `BIG_IDENTITY_GROUPS` 覆盖当前身份，用于模拟不同 Linux group session。
 - 本切片不展开或缓存 group 成员名单。
 - 本切片支持 `[acl] validate_groups = true` 下的 Linux/NSS group 存在性强校验；默认关闭以便本地实验和无真实企业 group 的手测环境继续运行。
-- 本切片不支持逐用户大规模授权，也不覆盖 repo-wide admin policy。
+- 本切片不支持逐用户大规模授权；repo-wide 维护命令的最小 admin group gate 由 `spec-prototype-repo-admin-policy.md` 覆盖，完整管理员策略仍属后续范围。
 - `[[acl_templates]]` 里的 group principal 必须显式使用 `group:<linux-group>`；CLI 的 `branch acl grant --group` 仍允许输入裸 group 名并归一化为 `group:<linux-group>`。
 - `branch acl grant --write` 会同时授予 read。
 

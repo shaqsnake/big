@@ -29,6 +29,7 @@ class RepoConfig:
     integration: str
     home: Path
     work_roots: tuple[WorkRoot, ...]
+    admin_groups: tuple[str, ...] = ()
     acl_templates: tuple[AclTemplate, ...] = ()
     acl_validate_groups: bool = False
     step_success_marker: str = ""
@@ -165,6 +166,20 @@ def _load_acl_validate_groups(data: dict[str, object]) -> bool:
     return value
 
 
+def _load_admin_groups(data: dict[str, object]) -> tuple[str, ...]:
+    raw_admin = data.get("admin", {})
+    if raw_admin is None:
+        return ()
+    if not isinstance(raw_admin, dict):
+        raise ValueError("admin must be declared with [admin]")
+    groups = raw_admin.get("groups", [])
+    if groups is None:
+        return ()
+    if not isinstance(groups, list):
+        raise ValueError("admin.groups must be a list")
+    return tuple(str(item).strip() for item in groups if str(item).strip())
+
+
 def _load_step_success_marker(data: dict[str, object]) -> str:
     raw_markers = data.get("step_markers", {})
     if raw_markers is None:
@@ -219,6 +234,7 @@ def load_config(config_path: Path) -> RepoConfig:
         integration=str(repo.get("integration", "2d")),
         home=home,
         work_roots=work_roots,
+        admin_groups=_load_admin_groups(data),
         acl_templates=_load_acl_templates(data),
         acl_validate_groups=_load_acl_validate_groups(data),
         step_success_marker=_load_step_success_marker(data),

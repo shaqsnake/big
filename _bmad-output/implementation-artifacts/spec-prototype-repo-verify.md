@@ -6,6 +6,7 @@ status: 'in-progress'
 context:
   - '{project-root}/_bmad-output/implementation-artifacts/spec-prototype-verify.md'
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
+  - '{project-root}/_bmad-output/implementation-artifacts/spec-prototype-repo-admin-policy.md'
 ---
 
 # 原型仓库级 CAS 完整性校验
@@ -20,7 +21,7 @@ context:
 
 - 只读校验，不修复 CAS，不修改 manifest，不移动 branch head。
 - 失败计数按 FileRef 统计；同一 CAS 对象被多个 version 引用时，会暴露每条受影响引用。
-- 为避免误把部分可见性当作完整仓库健康状态，本命令保持 repo-wide 语义；repo-wide admin policy 尚未实现前，CLI 用 `scope` 与 `acl_filter` 字段显式提示该边界。
+- 为避免误把部分可见性当作完整仓库健康状态，本命令保持 repo-wide 语义；CLI 用 `scope` 与 `acl_filter` 字段显式提示该边界，执行权限由 `spec-prototype-repo-admin-policy.md` 覆盖。
 - 当前原型不做后台定时扫描、不做告警持久化、不实现 audit hash chain。
 
 ## Acceptance

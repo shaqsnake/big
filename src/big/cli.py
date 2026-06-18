@@ -356,6 +356,40 @@ def _branch_acl_for_create(
     return owner_group, read_groups, write_groups, "default-current-identity"
 
 
+def _repo_admin_groups(config: RepoConfig) -> tuple[str, ...]:
+    return _unique_groups(
+        tuple(_normalize_admin_group_principal(item) for item in config.admin_groups)
+    )
+
+
+def _normalize_admin_group_principal(value: str) -> str:
+    if not value.strip().startswith("group:"):
+        raise click.ClickException(f"admin.groups must use group:<name>: {value}")
+    return _normalize_group_principal(value)
+
+
+def _repo_admin_policy_label(config: RepoConfig) -> str:
+    return "groups" if config.admin_groups else "none"
+
+
+def _require_repo_admin(config: RepoConfig) -> None:
+    admin_groups = _repo_admin_groups(config)
+    if not admin_groups:
+        return
+
+    for group in admin_groups:
+        _require_resolvable_linux_group(config, group)
+
+    identity = _current_identity()
+    identity_groups = set(identity["group_principals"])
+    if identity_groups & set(admin_groups):
+        return
+    raise click.ClickException(
+        "Permission denied: repo admin access; "
+        "refresh Linux group session or contact IT if group membership changed"
+    )
+
+
 def _format_groups(groups: tuple[str, ...]) -> str:
     return ",".join(groups) if groups else "-"
 
@@ -2034,6 +2068,7 @@ def shell_init_cmd(shell: str) -> None:
 def repo_stats_cmd() -> None:
     """Show repository storage usage statistics."""
     config, metadata = _repo_from_cwd()
+    _require_repo_admin(config)
     summary = metadata.storage_summary()
     cas_objects, cas_bytes = _scan_cas_objects(config.cas_dir)
     dedupe_ratio = (
@@ -2045,6 +2080,7 @@ def repo_stats_cmd() -> None:
     click.echo(f"repo: {config.repo_id}")
     click.echo("scope: repo-wide")
     click.echo("acl_filter: no")
+    click.echo(f"admin_policy: {_repo_admin_policy_label(config)}")
     click.echo(f"versions: {summary.versions}")
     click.echo(f"file_refs: {summary.file_refs}")
     click.echo(f"logical_bytes: {summary.logical_bytes}")
@@ -2074,6 +2110,7 @@ def repo_stats_cmd() -> None:
 def repo_verify_cmd(show_full: bool) -> None:
     """Verify every referenced CAS object in the repository."""
     config, metadata = _repo_from_cwd()
+    _require_repo_admin(config)
     summary = metadata.storage_summary()
     refs = metadata.list_all_file_refs()
     required_refs, optional_outputs = _required_refs_for_verify(metadata, refs)
@@ -2092,6 +2129,7 @@ def repo_verify_cmd(show_full: bool) -> None:
     click.echo(f"repo: {config.repo_id}")
     click.echo("scope: repo-wide")
     click.echo("acl_filter: no")
+    click.echo(f"admin_policy: {_repo_admin_policy_label(config)}")
     click.echo(f"versions: {summary.versions}")
     click.echo(f"file_refs: {len(refs)}")
     click.echo(f"required_file_refs: {len(required_refs)}")
