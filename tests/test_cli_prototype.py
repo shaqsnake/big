@@ -511,6 +511,21 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert f'"version_id":"{second_version.group(1)}"' in outbox_list.output
         assert '"manifest_hash"' in outbox_list.output
 
+        restricted_outbox = runner.invoke(
+            main,
+            ["outbox", "list", "--full"],
+            env={
+                "BIG_IDENTITY_USER": "mallory",
+                "BIG_IDENTITY_GROUPS": "outsiders",
+            },
+        )
+        assert restricted_outbox.exit_code == 0, restricted_outbox.output
+        assert "No visible pending outbox events." in restricted_outbox.output
+        assert "restricted: 1" in restricted_outbox.output
+        assert outbox_event.group(1) not in restricted_outbox.output
+        assert second_version.group(1) not in restricted_outbox.output
+        assert '"manifest_hash"' not in restricted_outbox.output
+
         lifecycle_events = runner.invoke(
             main,
             ["lifecycle", "events", second_version.group(1)],

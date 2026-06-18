@@ -247,7 +247,7 @@ big outbox list --full
 - `big promote` 输出 `candidate_outbox: queued` 和 `outbox_event: oe...`
 - `big show <version>` 展示 `state: [Candidate/resident]`
 - `big lifecycle events <version>` 展示 `Exploring->Candidate` 和原因
-- `big outbox list --full` 展示 `artifact.candidate_marked` pending 事件，payload 中包含 version、manifest 和 recipe 信息
+- `big outbox list --full` 展示当前身份有 read 权限的 `artifact.candidate_marked` pending 事件，payload 中包含 version、manifest 和 recipe 信息；无权限事件不会显示 event id、version id 或 payload，只显示 `restricted: <count>`
 - 当前原型只把 Candidate 交付事件可靠写入本地 outbox；还没有实现 outbox worker、delivery staging 或版本化发布目录。
 
 晋升到 `Golden` 需要显式确认：
@@ -575,8 +575,9 @@ big branch acl grant feature/place --group apr_team --write
 - `branch acl grant --read` 将 `group:apr_team` 加入 read groups
 - `branch acl grant --write` 将 `group:apr_team` 加入 write groups，同时 write 隐含 read
 - ACL 变更会写入 audit hash-chain；当前原型已经对核心 read/write 命令做基础权限拦截。
-- read 权限覆盖 branch list、branch show、branch acl show、branch events、checkout、log、show、lineage、lifecycle events、verify 和 diff。
+- read 权限覆盖 branch list、branch show、branch acl show、branch events、checkout、log、show、lineage、lifecycle events、outbox list、verify 和 diff。
 - `branch list` 只显示当前身份有 read 权限的 branch；受限 branch 不泄露名称、head 或 source ref，只用 `restricted: <count>` 提示被隐藏数量。
+- `outbox list` 只显示当前身份有 read 权限的 Candidate version 事件；受限事件不泄露 event id、version id 或 payload，只用 `restricted: <count>` 提示被隐藏数量。
 - write 权限覆盖 commit、reset、restore、promote、lifecycle degrade 和 branch acl grant。
 - 原型测试时可用 `BIG_IDENTITY_USER` 与 `BIG_IDENTITY_GROUPS` 临时模拟不同 Linux group session；生产方案仍应使用当前进程可见的 Linux/NSS groups。
 

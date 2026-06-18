@@ -430,6 +430,39 @@ def _require_version_permission(
         _require_branch_permission(metadata, version.branch, permission)
 
 
+def _version_permission_allowed(
+    metadata: SQLiteMetadataRepository,
+    version: VersionRecord,
+    permission: str,
+) -> bool:
+    if not version.branch:
+        return True
+    record = metadata.get_branch(version.branch)
+    if record is None:
+        return False
+    return _branch_permission_allowed(record, permission)
+
+
+def _outbox_event_allowed(
+    metadata: SQLiteMetadataRepository,
+    event: object,
+) -> bool:
+    try:
+        payload = json.loads(str(event.payload_json or "{}"))
+    except json.JSONDecodeError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+
+    version_id = str(payload.get("version_id", "")).strip()
+    if not version_id:
+        return False
+    version = metadata.get_version(version_id)
+    if version is None:
+        return False
+    return _version_permission_allowed(metadata, version, "read")
+
+
 def _expand_pattern_args(patterns: tuple[str, ...]) -> list[str]:
     expanded: list[str] = []
     for value in patterns:
@@ -2970,7 +3003,20 @@ def outbox_list_cmd(include_published: bool, limit: int, show_full: bool) -> Non
         click.echo(message)
         return
 
-    for item in events:
+    visible = [item for item in events if _outbox_event_allowed(metadata, item)]
+    restricted = len(events) - len(visible)
+    if not visible:
+        message = (
+            "No visible outbox events."
+            if include_published
+            else "No visible pending outbox events."
+        )
+        click.echo(message)
+        if restricted:
+            click.echo(f"restricted: {restricted}")
+        return
+
+    for item in visible:
         status = (
             "pending" if not item.published_at else f"published={item.published_at}"
         )
@@ -2980,6 +3026,8 @@ def outbox_list_cmd(include_published: bool, limit: int, show_full: bool) -> Non
         )
         if show_full:
             click.echo(f"  payload: {item.payload_json}")
+    if restricted:
+        click.echo(f"restricted: {restricted}")
 
 
 @branch.command("create")

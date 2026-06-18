@@ -15,7 +15,7 @@ context:
 
 **问题：** 架构要求 Candidate 状态迁移、审计和 outbox 事件同事务提交。本切片之前，原型在 `big promote --to Candidate` 后没有可靠 outbox 记录，用户无法验证“Candidate 已可靠入队，后续交付系统可幂等消费”的最小语义。
 
-**方案：** 在 SQLite metadata adapter 中增加本地 `outbox_event` 表。`big promote <version> --to Candidate` 从非 Candidate 状态成功迁移到 Candidate 时，在同一个 metadata transaction 内写入 lifecycle event、audit event 和 `artifact.candidate_marked` outbox event。新增只读命令 `big outbox list [--full] [--all]` 查看 pending 事件。
+**方案：** 在 SQLite metadata adapter 中增加本地 `outbox_event` 表。`big promote <version> --to Candidate` 从非 Candidate 状态成功迁移到 Candidate 时，在同一个 metadata transaction 内写入 lifecycle event、audit event 和 `artifact.candidate_marked` outbox event。新增只读命令 `big outbox list [--full] [--all]` 查看当前身份有 read 权限的 pending 事件；无权限事件只以 `restricted` 计数呈现，不泄露 event id、version id 或 payload。
 
 ## Boundaries
 
@@ -24,6 +24,7 @@ context:
 - `big promote --to Candidate` 的 no-op 不重复创建 outbox 事件。
 - 直接晋升到 `Pinned` 或 `Golden` 不补发 Candidate 事件；原型保持显式 Candidate transition 才触发 Candidate outbox。
 - `published_at` 预留给后续 worker，当前不会自动更新。
+- `big outbox list` 按 outbox payload 中的 `version_id` 回查 version，并复用该 version 所属 branch 的 read 权限；无法解析或无法授权的事件默认隐藏。
 
 ## Acceptance
 
@@ -35,6 +36,10 @@ context:
 - Given Candidate outbox 已入队
 - When 执行 `big outbox list --full`
 - Then 输出 pending event、version id、event type 和 payload JSON。
+
+- Given 当前身份没有 Candidate version 所属 branch 的 read 权限
+- When 执行 `big outbox list --full`
+- Then 不输出受限 event id、version id 或 payload，只输出 `restricted` 计数。
 
 - Given version 已经是 `Candidate`
 - When 再次执行 `big promote <version> --to Candidate`
