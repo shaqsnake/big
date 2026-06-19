@@ -183,7 +183,7 @@ big repo stats
 groups = ["group:repo_admins"]
 ```
 
-配置后，`big repo stats` 和 `big repo verify` 只有当前进程可见 Linux groups 命中其中任一 group 时才会执行；成功时输出 `admin_policy: groups`，未配置时输出 `admin_policy: none`。
+配置后，`big repo stats`、`big repo verify` 和 `big audit verify` 只有当前进程可见 Linux groups 命中其中任一 group 时才会执行；成功时输出 `admin_policy: groups`，未配置时输出 `admin_policy: none`。
 
 ### 用例 2：查看历史和详情
 
@@ -283,7 +283,7 @@ big audit verify
 期望：
 
 - `big audit log --full` 展示当前身份有 read 权限的最近写操作 action、entity、actor、时间、event hash、previous hash 和 payload 摘要；无权限事件不会显示 action、entity 或 payload，只显示 `restricted: <count>`
-- `big audit verify` 输出 `integrity: ok`
+- `big audit verify` 输出 `scope: repo-wide`、`acl_filter: no`、`admin_policy: ...` 和 `integrity: ok`；如果中心 `big.toml` 配置了 `[admin].groups`，该命令也需要当前进程可见 Linux groups 命中 repo admin group。
 - 当前原型只实现本地 hash-chain 校验；还没有实现服务端 append-only 审计日志、外部不可变介质锚定或审计导出。
 
 ### 用例 5：修改后再次提交并 diff
@@ -772,6 +772,6 @@ pwd
 
 暂未实现：
 
-- repo-wide admin policy 目前只覆盖 `repo stats` / `repo verify` 的最小 group gate；完整管理员审计、配置修改保护和服务端策略仍未实现
+- repo-wide admin policy 目前只覆盖 `repo stats` / `repo verify` / `audit verify` 的最小 group gate；完整管理员审计、配置修改保护和服务端策略仍未实现
 - 3DIC 多 work root checkout/restore 联动
 - recipe_only 的归档搬迁和远端召回

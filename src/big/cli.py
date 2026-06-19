@@ -3070,8 +3070,12 @@ def audit_log_cmd(limit: int, show_full: bool) -> None:
 @click.option("--full", "show_full", is_flag=True, help="Show every broken event.")
 def audit_verify_cmd(show_full: bool) -> None:
     """Verify the audit hash chain."""
-    _, metadata = _repo_from_cwd()
+    config, metadata = _repo_from_cwd()
+    _require_repo_admin(config)
     total, issues = metadata.verify_audit_chain()
+    click.echo("scope: repo-wide")
+    click.echo("acl_filter: no")
+    click.echo(f"admin_policy: {_repo_admin_policy_label(config)}")
     click.echo(f"events: {total}")
     click.echo(f"broken: {len(issues)}")
     click.echo(f"integrity: {'ok' if not issues else 'failed'}")

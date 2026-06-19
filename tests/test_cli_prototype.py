@@ -1793,6 +1793,12 @@ groups = ["group:repo_admins"]
         assert denied_verify.exit_code != 0
         assert "Permission denied: repo admin access" in denied_verify.output
 
+        denied_audit_verify = runner.invoke(
+            main, ["audit", "verify"], env=denied_env
+        )
+        assert denied_audit_verify.exit_code != 0
+        assert "Permission denied: repo admin access" in denied_audit_verify.output
+
         admin_env = {
             "BIG_IDENTITY_USER": "repo-admin",
             "BIG_IDENTITY_GROUPS": "repo_admins",
@@ -1806,6 +1812,12 @@ groups = ["group:repo_admins"]
         assert verify.exit_code == 0, verify.output
         assert "admin_policy: groups" in verify.output
         assert "integrity: ok" in verify.output
+
+        audit_verify = runner.invoke(main, ["audit", "verify"], env=admin_env)
+        assert audit_verify.exit_code == 0, audit_verify.output
+        assert "admin_policy: groups" in audit_verify.output
+        assert "events: 1" in audit_verify.output
+        assert "integrity: ok" in audit_verify.output
     finally:
         os.chdir(old_cwd)
 

@@ -6,6 +6,7 @@ status: 'in-progress'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-prototype-promote-lifecycle.md'
+  - '{project-root}/_bmad-output/implementation-artifacts/spec-prototype-repo-admin-policy.md'
 ---
 
 # 原型 audit hash-chain
@@ -21,7 +22,7 @@ context:
 - 覆盖当前原型中的写操作：`commit`、`branch create`、`branch acl grant`、`reset`、`restore`、`promote`、`lifecycle degrade`。
 - audit payload 只保存摘要字段，不保存完整 FileRef 列表，避免百万文件 commit 让审计表膨胀。
 - `audit log` 根据 event 的 branch、version 或 workspace payload 复用 branch read ACL；无权限事件不显示 action/entity/payload，只显示 `restricted` 计数。
-- `audit verify` 是仓库级完整性检查，仍重算完整 hash-chain，不按 ACL 过滤事件数或 broken 结果。
+- `audit verify` 是仓库级完整性检查，仍重算完整 hash-chain，不按 branch ACL 过滤事件数或 broken 结果；若中心 `big.toml` 配置了 `[admin].groups`，执行该命令需要命中 repo admin group。
 - 本切片不实现外部不可变介质锚定、不实现导出、不实现服务端 append-only 存储。
 - 本切片不改变 branch_events 或 lifecycle_events 的语义；audit 是独立的全局 hash-chain。
 - 旧原型仓库只会从升级后新增 audit event，不回填历史写操作。
@@ -38,7 +39,11 @@ context:
 
 - Given 多个写操作依次完成
 - When 执行 `big audit verify`
-- Then 输出事件数、`broken: 0` 和 `integrity: ok`。
+- Then 输出 `scope: repo-wide`、`acl_filter: no`、`admin_policy: ...`、事件数、`broken: 0` 和 `integrity: ok`。
+
+- Given `big.toml` 配置 `[admin].groups = ["group:repo_admins"]`
+- When 当前进程 groups 不包含 `repo_admins` 并执行 `big audit verify`
+- Then 命令在输出完整 hash-chain 结果前拒绝，并提示 repo admin access 被拒绝。
 
 - Given audit event 的 payload 被手工篡改
 - When 执行 `big audit verify --full`
