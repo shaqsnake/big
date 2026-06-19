@@ -1133,6 +1133,37 @@ def _checkout_target_path(
     )
 
 
+def _checkout_context_for_version(
+    config: RepoConfig,
+    fallback_context: WorkspaceContext,
+    version: VersionRecord,
+) -> WorkspaceContext:
+    if not version.work_root_id or not version.user_name or not version.flow:
+        return fallback_context
+
+    work_root = next(
+        (item for item in config.work_roots if item.id == version.work_root_id),
+        None,
+    )
+    if work_root is None:
+        raise click.ClickException(
+            f"Version references unregistered work root: {version.work_root_id}"
+        )
+
+    workspace_path = work_root.path / "user" / version.user_name / version.flow
+    return WorkspaceContext(
+        work_root=work_root,
+        user=version.user_name,
+        flow=version.flow,
+        workspace_path=workspace_path,
+        workspace_id=version.workspace_id or f"user/{version.user_name}/{version.flow}",
+        default_branch=(
+            version.branch
+            or f"workspace/{work_root.id}/{version.user_name}/{version.flow}"
+        ),
+    )
+
+
 def _normalize_manifest_pattern(pattern: str) -> str:
     value = pattern.replace("\\", "/").strip()
     while value.startswith("./"):
@@ -1972,11 +2003,16 @@ def checkout_cmd(
         )
         checkout_scope = "partial"
         materialization_kind = "partial"
-        omitted_files = len(all_refs) - len(refs)
+    omitted_files = len(all_refs) - len(refs)
     selection_hash = str(selection_profile.get("selection_hash", ""))
     selection_token = f"partial__{selection_hash}" if explicit_selection else ""
-    target_path = _checkout_target_path(
+    checkout_context = _checkout_context_for_version(
+        config,
         workspace_context,
+        version,
+    )
+    target_path = _checkout_target_path(
+        checkout_context,
         branch_name=branch_name,
         version_id=version.id,
         selection_token=selection_token,
@@ -1993,7 +2029,7 @@ def checkout_cmd(
     if not plan:
         materialization = _materialize_checkout(
             config=config,
-            workspace_context=workspace_context,
+            workspace_context=checkout_context,
             branch_name=branch_name,
             version_id=version.id,
             target_path=target_path,
@@ -2029,6 +2065,8 @@ def checkout_cmd(
         click.echo(f"source_ref: {source_ref}")
         click.echo(f"branch_created: {'plan-only' if plan else 'yes'}")
     click.echo(f"source_workspace: {workspace_context.workspace_path}")
+    if checkout_context.workspace_path != workspace_context.workspace_path:
+        click.echo(f"checkout_workspace: {checkout_context.workspace_path}")
     click.echo(f"target_path: {target_path}")
     click.echo(f"retention: {version.retention_state}")
     click.echo(f"checkout_scope: {checkout_scope}")

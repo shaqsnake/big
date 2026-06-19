@@ -2670,6 +2670,46 @@ def test_repo_init_supports_3dic_pointer_work_roots(tmp_path: Path) -> None:
         assert "branch: workspace/top/alice/APR" in commit.output
         assert (main_root / ".big" / "cas" / "objects").exists()
         assert not (top_root / ".big").exists()
+        version = re.search(r"version: (v[0-9a-f]+)", commit.output)
+        assert version
+
+        branch = runner.invoke(main, ["branch", "create", "feature/top"])
+        assert branch.exit_code == 0, branch.output
+        assert f"head: {version.group(1)}" in branch.output
+
+        bottom_workspace = bottom_root / "user" / "alice" / "APR"
+        bottom_workspace.mkdir(parents=True)
+        os.chdir(bottom_workspace)
+        checkout_target = (
+            top_root
+            / "user"
+            / "alice"
+            / ".big-checkouts"
+            / "APR"
+            / "feature__top"
+            / version.group(1)
+        )
+        checkout_plan = runner.invoke(main, ["checkout", "feature/top", "--plan"])
+        assert checkout_plan.exit_code == 0, checkout_plan.output
+        assert f"source_workspace: {bottom_workspace.resolve()}" in checkout_plan.output
+        assert f"checkout_workspace: {top_workspace.resolve()}" in checkout_plan.output
+        assert f"target_path: {checkout_target.resolve()}" in checkout_plan.output
+        assert not checkout_target.exists()
+
+        checkout = runner.invoke(main, ["checkout", "feature/top"])
+        assert checkout.exit_code == 0, checkout.output
+        assert "materialization: copied" in checkout.output
+        assert (checkout_target / "inputs" / "top.v").exists()
+        marker = json.loads(
+            (checkout_target / ".big-checkout.json").read_text(encoding="utf-8")
+        )
+        assert marker["work_root_id"] == "top"
+
+        os.chdir(checkout_target)
+        checkout_status = runner.invoke(main, ["status"])
+        assert checkout_status.exit_code == 0, checkout_status.output
+        assert f"work_root: top {top_root.resolve()}" in checkout_status.output
+        assert "default_ref: feature/top" in checkout_status.output
     finally:
         os.chdir(old_cwd)
 

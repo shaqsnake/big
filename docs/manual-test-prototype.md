@@ -101,6 +101,7 @@ big repo init manual-lab/data/StackChip_3D \
 - `manual-lab/data/StackChip_3D/big.toml` 是主配置，并且只有 `_3D` 下创建 `.big/`
 - `_Top`、`_Bottom`、`_MIX` 下各自创建指针型 `big.toml`
 - 在 `_Top/user/alice/APR` 下执行 `big status` 时，输出 `home: .../StackChip_3D`、`work_root: top .../StackChip_Top` 和 `default_ref: workspace/top/alice/APR`
+- 如果某个 branch 指向 `_Top` 中提交的 version，即使站在 `_Bottom/user/alice/APR` 下执行 `big checkout <branch> --plan`，`target_path` 也应位于 `_Top/user/alice/.big-checkouts/APR/...`，并额外输出 `checkout_workspace: .../StackChip_Top/user/alice/APR`
 
 进入工程师工作目录：
 
@@ -773,5 +774,5 @@ pwd
 暂未实现：
 
 - repo-wide admin policy 目前只覆盖 `repo stats` / `repo verify` / `audit verify` 的最小 group gate；完整管理员审计、配置修改保护和服务端策略仍未实现
-- 3DIC 多 work root checkout/restore 联动
+- 3DIC 多 work root restore 联动；checkout 目前只覆盖按目标 version 归属 root 生成物化目录
 - recipe_only 的归档搬迁和远端召回

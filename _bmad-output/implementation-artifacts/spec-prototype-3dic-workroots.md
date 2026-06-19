@@ -7,6 +7,7 @@ route: 'one-shot'
 context:
   - '{project-root}/_bmad-output/planning-artifacts/epics.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-prototype-cli-vertical-slice.md'
+  - '{project-root}/_bmad-output/implementation-artifacts/spec-prototype-3dic-checkout-target.md'
 ---
 
 # 原型 3DIC 多 work root 初始化
@@ -19,7 +20,7 @@ context:
 
 ## 边界
 
-- 本切片只实现配置读写、路径解析和指针配置，不实现 checkout、restore、ACL 或常驻 `big service`。
+- 本切片只实现配置读写、路径解析和指针配置；checkout 目标 root 归属由 `spec-prototype-3dic-checkout-target.md` 覆盖，本切片不实现 restore、ACL 或常驻 `big service`。
 - 当显式传入 `--work-root` 时，主 repo path 必须是登记的 work root 之一。
 - 指针 root 不创建自己的 `.big/` 仓库内部目录。
 
