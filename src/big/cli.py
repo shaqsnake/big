@@ -529,6 +529,19 @@ def _audit_event_allowed(
         if not branch:
             return False
         return _branch_ref_permission_allowed(metadata, branch, "read")
+    if entity_type == "outbox":
+        try:
+            payload = json.loads(str(event.payload_json or "{}"))
+        except json.JSONDecodeError:
+            return False
+        if not isinstance(payload, dict):
+            return False
+        if str(payload.get("aggregate_type", "")).strip() != "version":
+            return False
+        version = metadata.get_version(str(payload.get("aggregate_id", "")).strip())
+        if version is None:
+            return False
+        return _version_permission_allowed(metadata, version, "read")
     return False
 
 
@@ -3167,6 +3180,38 @@ def outbox_list_cmd(include_published: bool, limit: int, show_full: bool) -> Non
             click.echo(f"  payload: {item.payload_json}")
     if restricted:
         click.echo(f"restricted: {restricted}")
+
+
+@outbox.command("publish")
+@click.argument("event_id")
+@click.option(
+    "--confirm",
+    default="",
+    help="Required as PUBLISH to mark an outbox event as published.",
+)
+@click.option("--message", default="", help="Optional publish note for audit.")
+def outbox_publish_cmd(event_id: str, confirm: str, message: str) -> None:
+    """Mark a local outbox event as published without delivering it."""
+    config, metadata = _repo_from_cwd()
+    _require_repo_admin(config)
+    if confirm != "PUBLISH":
+        raise click.ClickException("Publishing an outbox event requires --confirm PUBLISH")
+
+    try:
+        event, changed = metadata.publish_outbox_event(
+            event_id=event_id,
+            actor=getpass.getuser(),
+            published_at=_utc_now(),
+            reason=message,
+        )
+    except ValueError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"outbox_event: {event.id}")
+    click.echo(f"event_type: {event.event_type}")
+    click.echo(f"aggregate: {event.aggregate_type} {event.aggregate_id}")
+    click.echo(f"published_at: {event.published_at}")
+    click.echo(f"outbox_publish: {'marked' if changed else 'no-op'}")
 
 
 @branch.command("create")

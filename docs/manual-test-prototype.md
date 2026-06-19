@@ -248,6 +248,9 @@ big promote <version> --to Candidate --message 'ready for review'
 big show <version>
 big lifecycle events <version>
 big outbox list --full
+big outbox publish <event-id> --confirm PUBLISH --message 'delivered manually'
+big outbox list
+big outbox list --all
 ```
 
 期望：
@@ -259,7 +262,8 @@ big outbox list --full
 - `big show <version>` 展示 `state: [Candidate/resident]`
 - `big lifecycle events <version>` 展示 `Exploring->Candidate` 和原因
 - `big outbox list --full` 展示当前身份有 read 权限的 `artifact.candidate_marked` pending 事件，payload 中包含 version、manifest 和 recipe 信息；无权限事件不会显示 event id、version id 或 payload，只显示 `restricted: <count>`
-- 当前原型只把 Candidate 交付事件可靠写入本地 outbox；还没有实现 outbox worker、delivery staging 或版本化发布目录。
+- `big outbox publish <event-id> --confirm PUBLISH` 只把本地 outbox event 标记为已发布并写入 audit，不执行外部投递；之后默认 `big outbox list` 不再显示该 pending event，`big outbox list --all` 显示 `published=<timestamp>`
+- 当前原型只把 Candidate 交付事件可靠写入本地 outbox，并支持人工标记已发布；还没有实现 outbox worker、delivery staging 或版本化发布目录。
 
 晋升到 `Golden` 需要显式确认：
 

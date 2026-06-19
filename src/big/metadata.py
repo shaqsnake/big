@@ -860,6 +860,63 @@ class SQLiteMetadataRepository(MetadataRepository):
                 ).fetchall()
         return [_outbox_event_from_row(row) for row in rows]
 
+    def publish_outbox_event(
+        self,
+        event_id: str,
+        actor: str,
+        published_at: str,
+        reason: str,
+    ) -> tuple[OutboxEvent, bool]:
+        with self.connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM outbox_event
+                WHERE id = ?
+                """,
+                (event_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Outbox event not found: {event_id}")
+
+            event = _outbox_event_from_row(row)
+            if event.published_at:
+                return event, False
+
+            conn.execute(
+                """
+                UPDATE outbox_event
+                SET published_at = ?
+                WHERE id = ? AND published_at = ''
+                """,
+                (published_at, event_id),
+            )
+            _append_audit_event(
+                conn,
+                action="publish_outbox",
+                entity_type="outbox",
+                entity_id=event_id,
+                actor=actor,
+                created_at=published_at,
+                payload={
+                    "outbox_event_id": event_id,
+                    "event_type": event.event_type,
+                    "aggregate_type": event.aggregate_type,
+                    "aggregate_id": event.aggregate_id,
+                    "published_at": published_at,
+                    "reason": reason,
+                },
+            )
+            updated = conn.execute(
+                """
+                SELECT * FROM outbox_event
+                WHERE id = ?
+                """,
+                (event_id,),
+            ).fetchone()
+            if updated is None:
+                raise ValueError(f"Outbox event not found after publish: {event_id}")
+            return _outbox_event_from_row(updated), True
+
     def verify_audit_chain(self) -> tuple[int, list[AuditChainIssue]]:
         with self.connect() as conn:
             rows = conn.execute(

@@ -532,6 +532,49 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         assert second_version.group(1) not in restricted_outbox.output
         assert '"manifest_hash"' not in restricted_outbox.output
 
+        publish_without_confirm = runner.invoke(
+            main,
+            ["outbox", "publish", outbox_event.group(1)],
+        )
+        assert publish_without_confirm.exit_code != 0
+        assert (
+            "Publishing an outbox event requires --confirm PUBLISH"
+            in publish_without_confirm.output
+        )
+
+        publish = runner.invoke(
+            main,
+            [
+                "outbox",
+                "publish",
+                outbox_event.group(1),
+                "--confirm",
+                "PUBLISH",
+                "--message",
+                "manual delivery smoke",
+            ],
+        )
+        assert publish.exit_code == 0, publish.output
+        assert f"outbox_event: {outbox_event.group(1)}" in publish.output
+        assert f"aggregate: version {second_version.group(1)}" in publish.output
+        assert "outbox_publish: marked" in publish.output
+
+        pending_after_publish = runner.invoke(main, ["outbox", "list"])
+        assert pending_after_publish.exit_code == 0, pending_after_publish.output
+        assert "No pending outbox events." in pending_after_publish.output
+
+        all_after_publish = runner.invoke(main, ["outbox", "list", "--all"])
+        assert all_after_publish.exit_code == 0, all_after_publish.output
+        assert outbox_event.group(1) in all_after_publish.output
+        assert "published=" in all_after_publish.output
+
+        publish_again = runner.invoke(
+            main,
+            ["outbox", "publish", outbox_event.group(1), "--confirm", "PUBLISH"],
+        )
+        assert publish_again.exit_code == 0, publish_again.output
+        assert "outbox_publish: no-op" in publish_again.output
+
         lifecycle_events = runner.invoke(
             main,
             ["lifecycle", "events", second_version.group(1)],
@@ -550,7 +593,7 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         )
         assert noop_promote.exit_code == 0, noop_promote.output
         assert "promote: no-op" in noop_promote.output
-        outbox_after_noop = runner.invoke(main, ["outbox", "list"])
+        outbox_after_noop = runner.invoke(main, ["outbox", "list", "--all"])
         assert outbox_after_noop.exit_code == 0, outbox_after_noop.output
         assert outbox_after_noop.output.count("artifact.candidate_marked") == 1
 
@@ -677,6 +720,7 @@ def test_repo_init_commit_log_show_and_diff(tmp_path: Path) -> None:
         final_audit_log = runner.invoke(main, ["audit", "log", "--limit", "20"])
         assert final_audit_log.exit_code == 0, final_audit_log.output
         assert f"commit version {checkout_version.group(1)}" in final_audit_log.output
+        assert f"publish_outbox outbox {outbox_event.group(1)}" in final_audit_log.output
         assert f"promote version {second_version.group(1)}" in final_audit_log.output
         assert "reset branch workspace/default/alice/APR" in final_audit_log.output
         assert "create_branch branch feature/place" in final_audit_log.output
