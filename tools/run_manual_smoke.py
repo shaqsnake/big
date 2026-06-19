@@ -391,12 +391,37 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     _expect_contains(alice_promote, "new_state: [Candidate/resident]")
     _expect_contains(alice_promote, "candidate_outbox: queued")
     _expect_contains(alice_promote, "outbox_event: oe")
+    alice_outbox_event = _value_from(alice_promote, "outbox_event")
 
     outbox_list = _run_big(["outbox", "list", "--full"], alice_workspace, env)
     _expect_contains(outbox_list, "artifact.candidate_marked")
     _expect_contains(outbox_list, f"version {alice_version}")
     _expect_contains(outbox_list, "pending")
     _expect_contains(outbox_list, f'"version_id":"{alice_version}"')
+
+    outbox_publish = _run_big(
+        [
+            "outbox",
+            "publish",
+            alice_outbox_event,
+            "--confirm",
+            "PUBLISH",
+            "--message",
+            "manual smoke delivery",
+        ],
+        alice_workspace,
+        env,
+    )
+    _expect_contains(outbox_publish, f"outbox_event: {alice_outbox_event}")
+    _expect_contains(outbox_publish, f"aggregate: version {alice_version}")
+    _expect_contains(outbox_publish, "outbox_publish: marked")
+
+    outbox_pending_after_publish = _run_big(["outbox", "list"], alice_workspace, env)
+    _expect_contains(outbox_pending_after_publish, "No pending outbox events.")
+
+    outbox_all_after_publish = _run_big(["outbox", "list", "--all"], alice_workspace, env)
+    _expect_contains(outbox_all_after_publish, alice_outbox_event)
+    _expect_contains(outbox_all_after_publish, "published=")
 
     lifecycle_events = _run_big(
         ["lifecycle", "events", alice_version],
@@ -610,15 +635,16 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     _expect_contains(stats, "recipe_only: versions=1")
 
     audit_verify = _run_big(["audit", "verify"], alice_workspace, env)
-    _expect_contains(audit_verify, "events: 11")
+    _expect_contains(audit_verify, "events: 12")
     _expect_contains(audit_verify, "integrity: ok")
 
-    audit_log = _run_big(["audit", "log", "--limit", "10"], alice_workspace, env)
+    audit_log = _run_big(["audit", "log", "--limit", "12"], alice_workspace, env)
     _expect_contains(audit_log, f"commit version {shaq_version}")
     _expect_contains(audit_log, f"commit version {alice_modified_version}")
     _expect_contains(audit_log, f"commit version {alice_version}")
     _expect_contains(audit_log, "restore workspace user/alice/APR")
     _expect_contains(audit_log, f"degrade version {shaq_version}")
+    _expect_contains(audit_log, f"publish_outbox outbox {alice_outbox_event}")
     _expect_contains(audit_log, f"promote version {alice_version}")
     _expect_contains(audit_log, "create_branch branch recipe/shaq")
     _expect_contains(audit_log, "create_branch branch feature/place")
