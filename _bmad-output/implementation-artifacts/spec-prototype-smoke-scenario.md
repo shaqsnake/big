@@ -13,13 +13,14 @@ context:
   - '{project-root}/_bmad-output/implementation-artifacts/spec-prototype-derived-from-lineage.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-prototype-diff-summary.md'
   - '{project-root}/_bmad-output/implementation-artifacts/spec-prototype-show-details.md'
+  - '{project-root}/_bmad-output/implementation-artifacts/spec-prototype-3dic-checkout-target.md'
 ---
 
 # 原型 WSL smoke 场景
 
 ## Intent
 
-**问题：** `make smoke` 原先只覆盖 init、commit、log，已经落后于当前原型的关键路径；用户在 WSL 中手工验证时，还需要确认 shell 集成输出、`big run` 受管 lease、workspace-private ref 隔离、显式 `restore --in-place`、derived_from lineage、lineage depth 截断、show/diff 摘要、Candidate 晋升、命名 branch、branch ACL 元数据与基础拦截、branch checkout、显式部分 checkout、`--print-path` 输出模式、历史版本 `--new-branch` checkout、recipe_only inputs-only checkout、仓库级完整性校验、repo stats 和 audit hash-chain。
+**问题：** `make smoke` 原先只覆盖 init、commit、log，已经落后于当前原型的关键路径；用户在 WSL 中手工验证时，还需要确认 3DIC 多 work root checkout 目标归属、shell 集成输出、`big run` 受管 lease、workspace-private ref 隔离、显式 `restore --in-place`、derived_from lineage、lineage depth 截断、show/diff 摘要、Candidate 晋升、命名 branch、branch ACL 元数据与基础拦截、branch checkout、显式部分 checkout、`--print-path` 输出模式、历史版本 `--new-branch` checkout、recipe_only inputs-only checkout、仓库级完整性校验、repo stats 和 audit hash-chain。
 
 **方案：** 新增 `tools/run_manual_smoke.py`，由 Makefile 调用。脚本在可重置的 `manual-lab/` 目录下生成 fixture，执行真实 `python -m big` 命令，并对关键输出和落盘文件做断言。
 
@@ -35,6 +36,10 @@ context:
 - Given 当前源码工作区
 - When 执行 `make smoke`
 - Then 脚本重建 `manual-lab/data/WslChip` 并完成 repo init。
+
+- Given smoke 创建独立的 3DIC fixture
+- When 在 `_Top` work root 提交并从 `_Bottom` work root checkout `feature/top`
+- Then `target_path` 位于 `_Top/user/alice/.big-checkouts/APR/...`，输出包含 `checkout_workspace`，进入目标目录后 `status` 显示 `work_root: top`。
 
 - Given alice 的 APR workspace
 - When smoke 执行 shell-init、`big run`、commit、restore plan、restore execute、restore 后继续 commit、lineage、show、diff、promote、branch create、branch ACL show/grant、branch checkout、显式部分 checkout、`--print-path`、历史版本 `--new-branch` checkout

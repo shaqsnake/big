@@ -91,6 +91,107 @@ def _enable_capture_controls(root: Path) -> None:
         config_path.write_text(text + "\n" + "\n".join(additions), encoding="utf-8")
 
 
+def _run_3dic_checkout_smoke(root: Path, repo_id: str, project_root: Path, env: dict[str, str]) -> None:
+    stack_root = root / "3dic"
+    main_root = stack_root / f"{repo_id}_3D"
+    top_root = stack_root / f"{repo_id}_Top"
+    bottom_root = stack_root / f"{repo_id}_Bottom"
+    mix_root = stack_root / f"{repo_id}_MIX"
+
+    top_workspace = top_root / "user" / "alice" / "APR"
+    bottom_workspace = bottom_root / "user" / "alice" / "APR"
+    for workspace in (top_workspace, bottom_workspace):
+        workspace.mkdir(parents=True, exist_ok=True)
+    (top_workspace / "inputs").mkdir(parents=True, exist_ok=True)
+    (top_workspace / "outputs").mkdir(parents=True, exist_ok=True)
+    (top_workspace / "inputs" / "top.v").write_text(
+        "module top; endmodule\n",
+        encoding="utf-8",
+    )
+    (top_workspace / "outputs" / "top.def").write_text(
+        "VERSION 5.8 ;\n",
+        encoding="utf-8",
+    )
+
+    _run_big(
+        [
+            "repo",
+            "init",
+            str(main_root),
+            "--repo-id",
+            repo_id,
+            "--integration",
+            "3d",
+            "--work-root",
+            f"3d={main_root}",
+            "--work-root",
+            f"top={top_root}",
+            "--work-root",
+            f"bottom={bottom_root}",
+            "--work-root",
+            f"mix={mix_root}",
+        ],
+        project_root,
+        env,
+    )
+
+    top_status = _run_big(["status"], top_workspace, env)
+    _expect_contains(top_status, "integration: 3d")
+    _expect_contains(top_status, "work_root: top")
+    _expect_contains(top_status, "default_ref: workspace/top/alice/APR")
+
+    top_commit = _run_big(
+        [
+            "commit",
+            "--step",
+            "place",
+            "--inputs",
+            "inputs/**;",
+            "--outputs",
+            "outputs/**;",
+            "--message",
+            "3dic top smoke snapshot",
+        ],
+        top_workspace,
+        env,
+    )
+    top_version = _version_from(top_commit)
+    _expect_contains(top_commit, "branch: workspace/top/alice/APR")
+
+    _run_big(["branch", "create", "feature/top"], top_workspace, env)
+
+    cross_root_plan = _run_big(["checkout", "feature/top", "--plan"], bottom_workspace, env)
+    _expect_contains(cross_root_plan, f"version: {top_version}")
+    _expect_contains(cross_root_plan, f"source_workspace: {bottom_workspace.resolve()}")
+    _expect_contains(cross_root_plan, f"checkout_workspace: {top_workspace.resolve()}")
+    cross_root_target = Path(_value_from(cross_root_plan, "target_path"))
+    expected_target = (
+        top_root
+        / "user"
+        / "alice"
+        / ".big-checkouts"
+        / "APR"
+        / "feature__top"
+        / top_version
+    ).resolve()
+    if cross_root_target != expected_target:
+        raise SystemExit(
+            f"3DIC checkout target mismatch: {cross_root_target} != {expected_target}"
+        )
+    if cross_root_target.exists():
+        raise SystemExit(f"3DIC plan-only checkout unexpectedly created: {cross_root_target}")
+
+    cross_root_checkout = _run_big(["checkout", "feature/top"], bottom_workspace, env)
+    _expect_contains(cross_root_checkout, "materialization: copied")
+    if not (expected_target / "inputs" / "top.v").exists():
+        raise SystemExit(f"3DIC checkout input is missing: {expected_target}")
+
+    cross_root_status = _run_big(["status"], expected_target, env)
+    _expect_contains(cross_root_status, "work_root: top")
+    _expect_contains(cross_root_status, "default_ref: feature/top")
+    _expect_contains(cross_root_status, f"head: {top_version}")
+
+
 def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
     project_root = _project_root()
     root = root.resolve()
@@ -105,6 +206,8 @@ def run_smoke(root: Path, repo_id: str, reset: bool) -> None:
         if not env.get("PYTHONPATH")
         else src_path + os.pathsep + env["PYTHONPATH"]
     )
+
+    _run_3dic_checkout_smoke(root, f"{repo_id}Stack", project_root, env)
 
     alice_workspace = root / "user" / "alice" / "APR"
     shaq_workspace = root / "user" / "shaqsnake" / "APR"
